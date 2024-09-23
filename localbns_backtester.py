@@ -102,6 +102,7 @@ class LocalBNS:
                     buys[symbol].append(buy)
                     sells[symbol].append(sell)
                 
+                #매집
                 if len(buys[self.symbols[0]]) > l and not hedging:
                     for symbol in self.symbols:
                         buy = min_max_normalize(buys[symbol][-l:])[-1]
