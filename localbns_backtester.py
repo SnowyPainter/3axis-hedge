@@ -132,7 +132,7 @@ class LocalBNS:
                     b2_h = abs(hr['vola-b2'])
                     m1 = max_risk / b1_h
                     m2 = max_risk / b2_h
-                    if 0.9 < m1 < 1.1 and 0.9 < m2 < 1.1 and (a+b1+b2) > 80:
+                    if 1 - max_risk / 2 < m1 < 1 + max_risk / 2 and 1 - max_risk / 2 < m2 < 1 + max_risk / 2 and (a+b1+b2) > 80:
                         print("헷지 시작")
                         self.bt.print_stock_weights()
                         hedging = True
