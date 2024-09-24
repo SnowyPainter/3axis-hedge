@@ -68,7 +68,7 @@ class LocalBNS:
         else:
             return 0, 0
     
-    def backtest(self, market="^IXIC", max_risk=0.5, refresh_portfolio_period=31):
+    def backtest(self, market="^IXIC", max_risk=0.5, refresh_portfolio_period=31, A_ratio=20):
         def _process_data(raw, bar):
             price_columns = list(map(lambda symbol: symbol+"_Price", self.symbols))
             return {
@@ -88,7 +88,8 @@ class LocalBNS:
         allow_sell = False
         allow_buy = True
         flag = False
-        
+        start_day = None
+        left_r = (100 - A_ratio) / 2
         l = localbns.seqlen * 2
         while True:
             preprocessed, today = self.bt.go_next()
@@ -103,87 +104,97 @@ class LocalBNS:
                     sells[symbol].append(sell)
                 
                 #매집
+                a, b1, b2 = self.bt.current_weights()
                 if len(buys[self.symbols[0]]) > l and not hedging:
                     for symbol in self.symbols:
                         buy = min_max_normalize(buys[symbol][-l:])[-1]
                         sell = min_max_normalize(sells[symbol][-l:])[-1]
                         r, r2 = self.calculate_ratio(buy, sell, ignore_theshold=0.9, threshold=0.55)
+                        if not flag: #still 매집 기간
+                            if a >= A_ratio and symbol == self.symbols[0]: #a 주식 매수 제한
+                                continue
+                            if b1 >= left_r and symbol == self.symbols[1]:
+                                continue
+                            if b2 >= left_r and symbol == self.symbols[2]: 
+                                continue
                         if r > 0 and allow_buy:
-                            self.bt.buy(symbol, 0.05)
+                            self.bt.buy(symbol, r2 / 10)
                         if r < 0 and allow_sell:
-                            self.bt.sell(symbol, 0.05)
+                            self.bt.sell(symbol, r2 / 10)
                 
                 A_value = self.bt.value_of(self.symbols[0])
                 B1_value = self.bt.value_of(self.symbols[1])
                 B2_value = self.bt.value_of(self.symbols[2])
                 total_value = A_value + B1_value + B2_value
                 if A_value > 0 and B1_value > 0 and B2_value > 0 and not flag:
-                    hedging = True
-                    allow_buy = False
-                    allow_sell = False
-                    flag = True
+                    hr = hedge_manager.get_hedge_ratio(bar, localbns.seqlen * 2)
+                    b1_h = abs(hr['vola-b1'])
+                    b2_h = abs(hr['vola-b2'])
+                    m1 = max_risk / b1_h
+                    m2 = max_risk / b2_h
+                    if 0.9 < m1 < 1.1 and 0.9 < m2 < 1.1 and (a+b1+b2) > 80:
+                        print("헷지 시작")
+                        self.bt.print_stock_weights()
+                        hedging = True
+                        allow_buy = False
+                        allow_sell = False
+                        flag = True
+                        start_day = today
                 
                 if hedging and bar > 0 and bar % refresh_portfolio_period == 0:
                     print("-"*60)
                     self.bt.print_stock_weights()
-                    
                     hr = hedge_manager.get_hedge_ratio(bar, localbns.seqlen * 2)
                     
                     #헷지용 주식 B1, B2에 대한 조정
                     hr_opt = hedge_manager.optimize_hedging(A_value, B1_value, B2_value, hr, max_risk)
-                    print(f"자산 A: {A_value}, 헷지용 주식 가치: {B1_value + B2_value}")
-                    b1_hr_opt_ratio = (B1_value * hr_opt[0]) / total_value
-                    b2_hr_opt_ratio = (B2_value * hr_opt[1]) / total_value
-                    if hr['vola-b1'] > 0 and abs(hr_opt[0]) > 0: #매도
-                        print(f"{self.symbols[1]} 헷지 조정(Sell) {hr_opt[0]} - {b1_hr_opt_ratio}")
-                        self.bt.sell(self.symbols[1], b1_hr_opt_ratio)
-                    elif hr['vola-b1'] < 0 and abs(hr_opt[0]) > 0:
-                        print(f"{self.symbols[1]} 헷지 조정(Buy) {hr_opt[0]} - {b1_hr_opt_ratio}")
-                        self.bt.buy(self.symbols[1], b1_hr_opt_ratio)
-                    
-                    if hr['vola-b2'] > 0 and abs(hr_opt[1]) > 0: #매도
-                        print(f"{self.symbols[2]} 헷지 조정(Sell) {hr_opt[1]} - {b2_hr_opt_ratio}")
-                        self.bt.sell(self.symbols[2], b2_hr_opt_ratio)
-                    elif hr['vola-b2'] < 0 and abs(hr_opt[0]) > 0:
-                        print(f"{self.symbols[2]} 헷지 조정(Buy) {hr_opt[1]} - {b2_hr_opt_ratio}")
-                        self.bt.buy(self.symbols[2], b2_hr_opt_ratio)
-                        
+                    for i in range(0, 2):
+                        v = self.bt.value_of(self.symbols[i+1])
+                        indic = hr[f'vola-b{i+1}'] # True == 매도
+                        indic2 = abs(hr_opt[i])
+                        hr_opt_ratio = (v * hr_opt[i]) / total_value
+                        s = self.symbols[i+1]
+                        if indic > 0 and indic2 > 0: #매도
+                            print(f"헷지 {s} : {hr_opt_ratio * 100 :.2f} % 매도")
+                            self.bt.sell(s, hr_opt_ratio)
+                        elif indic < 0 and indic2 > 0: #매수
+                            print(f"헷지 {s} : {hr_opt_ratio * 100 :.2f} % 매수")
+                            self.bt.buy(s, hr_opt_ratio)
+
                     #포트폴리오 재조정
                     A_opt_r = hedge_manager.optimize_reduction(A_value, B1_value, B2_value, hr)
                     A,B1,B2 = hedge_manager.adjust_portfolio(A_value, B1_value, B2_value, hr, max_risk, A_opt_r)
                     T = A+B1+B2
-                    A_iw, B1_iw, B2_iw = A/2, B1/T, B2/T
-                    A_cw, B1_cw, B2_cw = self.bt.current_weights()
-                    Anw = A_iw - A_cw
-                    B1nw = B1_iw - B1_cw
-                    B2nw = B2_iw - B2_cw
-                    if Anw < 0:
-                        self.bt.sell(self.symbols[0], Anw)
-                    elif Anw > 0:
-                        self.bt.buy(self.symbols[0], Anw)
-                        
-                    if B1nw < 0:
-                        self.bt.sell(self.symbols[1], B1nw)
-                    elif B1nw > 0:
-                        self.bt.buy(self.symbols[1], B1nw)
-                        
-                    if B2nw < 0:
-                        self.bt.sell(self.symbols[2], B2nw)
-                    elif B2nw > 0:
-                        self.bt.buy(self.symbols[2], B2nw)
-                    
-                    
+                    print("포트폴리오 재조정")
+                    for i, iw, cw in zip(range(3), [A/T, B1/T, B2/T], self.bt.current_weights()):
+                        cw /= 100
+                        nw = iw - cw
+                        r = abs(nw) * cw
+                        s = self.symbols[i]
+                        if nw < 0:
+                            print(f"{s} : {abs(nw) * 100 :.2f}({r * 100 :.2f}) % 매도 | ", end='')
+                            self.bt.sell(s, r)
+                        elif nw > 0:
+                            print(f"{s} : {abs(nw) * 100 :.2f}({r * 100 :.2f}) % 매수 | ", end='')
+                            self.bt.buy(self.symbols[i], r)
+                    print('')
+                    #헤지용 자산 잔고 바닥임을 감안하여 A 조정
                     if A_opt_r > 0:
-                        print(f"A에 대한 조정 {A_opt_r} - r {(A_value * A_opt_r) / total_value}")
+                        r = (A_value * A_opt_r) / total_value
+                        print(f"(A)매도 조정 - {self.symbols[0]} : {r * 100 :.2f} %")
                         self.bt.sell(self.symbols[0], (A_value * A_opt_r) / total_value)
                     
-                    if A_value / total_value < 0.03 or B1_value / total_value < 0.03 or B2_value / total_value < 0.03:
-                        print(f"더 이상 헤지할 필요 없음. 나머지 차익 실현.")
+                    #헤지용 자산 잔고 바닥
+                    if B1_value / total_value < 0.03 or B2_value / total_value < 0.03:
+                        print(f"헤지 불능 상태")
+                        self.bt.print_stock_weights()
                         allow_sell = True
                         allow_buy = False
                         hedging = False
                     
             bar += 1
+        
+        print(f"{start_day} 부터 {raw.index[-1]} 까지의 백테스팅")
         
         print(self.bt.get_result())
         self.bt.plot_result(localbns.normalize(raw))

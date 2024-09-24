@@ -148,23 +148,25 @@ class Backtester:
         return units
 
     def print_stock_weights(self):
-        total_units = sum(self.units.values())
+        
+        '''
+        자산 기준 weights
+        '''
+        
         for stock, unit in self.units.items():
-            if total_units > 0:
-                weight = unit / total_units * 100
-            else:
-                weight = 0
+            weight = ((unit * self.entry_price[stock]) / self.init_amount) * 100
             print(f"{stock}: {weight:.2f}% |", end='')
         print()
     
     def current_weights(self):
-        total_units = sum(self.units.values())
+        
+        '''
+        자산 기준 weights
+        '''
+        
         weights = []
         for stock, unit in self.units.items():
-            if total_units > 0:
-                weight = unit / total_units * 100
-            else:
-                weight = 0
+            weight = ((unit * self.entry_price[stock]) / self.init_amount) * 100 
             weights.append(weight)
         return weights
     
