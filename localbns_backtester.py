@@ -10,22 +10,18 @@ from tensorflow import keras
 class LocalBNS:
     
     def __init__(self, a_symbol, b1_symbol, b2_symbol):
-        self.buyers = {}
-        self.sellers = {}
+        self.buyers = {
+            a_symbol: keras.models.load_model(f'best_buy_{a_symbol}_finetuned_model.h5'),
+            b1_symbol: keras.models.load_model(f'best_buy_{b1_symbol}_finetuned_model.h5'),
+            b2_symbol: keras.models.load_model(f'best_buy_{b2_symbol}_finetuned_model.h5')
+        }
+        self.sellers = {
+            a_symbol: keras.models.load_model(f'best_sell_{a_symbol}_finetuned_model.h5'),
+            b1_symbol: keras.models.load_model(f'best_sell_{b1_symbol}_finetuned_model.h5'),
+            b2_symbol: keras.models.load_model(f'best_sell_{b2_symbol}_finetuned_model.h5')
+        }
         self.symbols = [a_symbol, b1_symbol, b2_symbol]
-        if not utils.models_exists(self.symbols):
-            for symbol in self.symbols:
-                data = utils.load_historical_data(symbol, utils.today_before(1200), utils.today(), interval='1d')
-                b, a = localbns.get_52_ba(data, symbol)
-                self.buyers[symbol] = localbns.create_buy_model(b, symbol)
-                self.sellers[symbol] = localbns.create_sell_model(a, symbol)
-                self.buyers[symbol].save(f"{symbol}_Buy.keras")
-                self.sellers[symbol].save(f"{symbol}_Sell.keras")
-        else:
-            for symbol in self.symbols:
-                self.buyers[symbol] = keras.models.load_model(f'{symbol}_Buy.keras')
-                self.sellers[symbol] = keras.models.load_model(f'{symbol}_Sell.keras')
-            
+        
         self.buys = []
         self.sells = []
         
@@ -132,7 +128,8 @@ class LocalBNS:
                     b2_h = abs(hr['vola-b2'])
                     m1 = max_risk / b1_h
                     m2 = max_risk / b2_h
-                    if 1 - max_risk / 2 < m1 < 1 + max_risk / 2 and 1 - max_risk / 2 < m2 < 1 + max_risk / 2 and (a+b1+b2) > 80:
+                    if a > A_ratio and ((b1 > (100-a)/2 or b2 > (100-a)/2) and b1 + b2 > (80-a)/2):
+                    #if 1 - max_risk / 2 < m1 < 1 + max_risk / 2 and 1 - max_risk / 2 < m2 < 1 + max_risk / 2 and (a+b1+b2) > 80:
                         print("헷지 시작")
                         self.bt.print_stock_weights()
                         hedging = True

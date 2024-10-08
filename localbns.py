@@ -20,6 +20,7 @@ def normalize(df):
     return (df - df.min()) / (range_val)
 
 def create_sequences(data, features, target, seq_length):
+    print(data)
     X, y = [], []
     for i in range(len(data) - seq_length):
         X.append(data[features].iloc[i:i+seq_length].values)
@@ -120,7 +121,7 @@ def create_buy_model(raw, symbol):
     features = ['MACD', 'Bollinger_Lower']
     target = 'Buy_Signal'
     X, y = create_sequences(data, features, target, seq_length)
-    split_ratio = 0.6
+    split_ratio = 0.8
     split_index = int(len(X) * split_ratio)
     X_train, X_test = X[:split_index], X[split_index:]
     y_train, y_test = y[:split_index], y[split_index:]
@@ -132,8 +133,9 @@ def create_buy_model(raw, symbol):
         Dense(1, activation='sigmoid')
     ])
     model.compile(optimizer=Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
-    history = model.fit(X_train, y_train, epochs=100, batch_size=24, validation_split=0.2, verbose=1)
+    history = model.fit(X_train, y_train, epochs=300, batch_size=48, validation_split=0.2, verbose=1)
     loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+    print(f"Loss : {loss :.5f}, Accuracy: {accuracy :.5f}")
     return model
 
 def create_sell_model(raw, symbol):
@@ -169,5 +171,6 @@ def create_sell_model(raw, symbol):
     model.compile(optimizer=Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
     history = model.fit(X_train, y_train, epochs=100, batch_size=24, validation_split=0.2, verbose=1)
     loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+    print(f"Loss : {loss :.5f}, Accuracy: {accuracy :.5f}")
     return model
     

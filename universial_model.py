@@ -1,0 +1,291 @@
+import os
+import pandas as pd
+import glob
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.optimizers import Adam
+import numpy as np
+import pickle
+
+import localbns
+
+def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combined_close_prices.pkl'):
+    csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
+    combined_df = pd.DataFrame()
+    # List of top 25 S&P 500 companies by market cap
+    top_companies = [
+        'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'BRK-B', 'AVGO', 'GOOG', 'LLY',
+        'TSLA', 'JPM', 'UNH', 'XOM', 'V', 'MA', 'PG', 'COST', 'JNJ', 'HD',
+        'WMT', 'ABBV', 'NFLX', 'MRK', 'KO'
+    ]
+
+    # Filter CSV files to include only the top companies
+    csv_files = [f for f in csv_files if any(company in f for company in top_companies)]
+    print(f"Number of top companies found: {len(csv_files)}")
+    for file in csv_files:
+        df = pd.read_csv(file)
+        stock_name = os.path.basename(file).split('.')[0]
+        df = df[['Date', 'Close']]
+        df['Close'] = df['Close'].astype(float)
+        df['Date'] = pd.to_datetime(df['Date'], format='%d-%m-%Y')  # Convert date format
+        df = df.rename(columns={'Close': stock_name})
+        df.set_index('Date', inplace=True)
+        if combined_df.empty:
+            combined_df = df
+        else:
+            combined_df = combined_df.join(df, how='outer')
+    combined_df.sort_index(inplace=True)
+    # Filter data from 2005 onwards
+    combined_df = combined_df.loc['2010-01-01':]
+    original_columns = len(combined_df.columns)
+    # Remove columns with 30 or more consecutive NaN values
+    combined_df = combined_df.dropna(axis=1, thresh=len(combined_df) - 29)
+    # Remove columns where all values are NaN
+    combined_df = combined_df.dropna(axis=1, how='all')
+    removed_columns = original_columns - len(combined_df.columns)
+    print(f"Filtered data from 2010 onwards.")
+    print(f"Removed {removed_columns} columns where all values were NaN.")
+    print(f"Remaining columns: {len(combined_df.columns)}")
+    combined_df.dropna(inplace=True)
+    combined_df.to_pickle(pickle)
+
+def load_combined_prices(pickle):
+    try:
+        df = pd.read_pickle(pickle)
+        print(f"Successfully loaded combined close prices from {pickle}")
+        print(df)
+        print(f"\nShape of the DataFrame: {df.shape}")
+        return df
+    except FileNotFoundError:
+        print(f"Error: '{pickle}' not found. Please run create_pickle() first.")
+        return None
+
+def save_data_chunk(X, y, prefix, chunk_dir='./chunks'):
+    os.makedirs(chunk_dir, exist_ok=True)
+    chunk_id = len(glob.glob(os.path.join(chunk_dir, f'{prefix}data_chunk_*.pkl')))
+    with open(os.path.join(chunk_dir, f'{prefix}data_chunk_{chunk_id}.pkl'), 'wb') as f:
+        pickle.dump((np.array(X), np.array(y)), f)
+
+def process_symbol_data(symbol, df_with_indicators, seq_length, features, target_function):
+    print(f"Processing {symbol}...")
+    data = df_with_indicators[[f'{symbol}'] + [f'{symbol}_{feature}' for feature in features]].copy()
+    data = localbns.normalize(data)
+    
+    data = target_function(data, symbol)
+    data.dropna(inplace=True)
+    
+    symbol_X, symbol_y = [], []
+    for i in range(len(data) - seq_length):
+        symbol_X.append(data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
+        symbol_y.append(data[f'{symbol}_Signal'].iloc[i+seq_length])
+    
+    print(f"{symbol} : Preprocessed")
+    return symbol_X, symbol_y
+
+def create_and_save_data(symbols, df_with_indicators, seq_length, features, target_function, prefix):
+    X, y = [], []
+    for symbol in symbols:
+        symbol_X, symbol_y = process_symbol_data(symbol, df_with_indicators, seq_length, features, target_function)
+        X.extend(symbol_X)
+        y.extend(symbol_y)
+        
+        if len(X) > 4000:  # Adjust this threshold as needed
+            save_data_chunk(X, y, prefix)
+            X, y = [], []
+    
+    if X:
+        save_data_chunk(X, y, prefix)
+
+def load_and_split_data(prefix, chunk_dir='./chunks'):
+    X_all, y_all = [], []
+    for chunk_file in glob.glob(os.path.join(chunk_dir, f'{prefix}data_chunk_*.pkl')):
+        with open(chunk_file, 'rb') as f:
+            X_chunk, y_chunk = pickle.load(f)
+            X_all.append(X_chunk)
+            y_all.append(y_chunk)
+    
+    X_all = np.concatenate(X_all, axis=0)
+    y_all = np.concatenate(y_all, axis=0)
+    
+    print("Starting train-test split...")
+    X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=42)
+    print("Split completed")
+    return X_train, X_test, y_train, y_test
+
+def create_model(input_shape, loss='mse'):
+    model = Sequential([
+        LSTM(64, activation='tanh', return_sequences=True, input_shape=input_shape),
+        Dropout(0.3),
+        LSTM(24, activation='tanh', return_sequences=True),
+        Dropout(0.3),
+        LSTM(12, activation='tanh'),  # 마지막 LSTM 레이어
+        Dense(1, activation='sigmoid')  # 이진 분류를 위한 Dense 레이어
+    ])
+    model.compile(optimizer=Adam(learning_rate=0.001), loss=loss, metrics=['mae' if loss == 'mse' else 'accuracy'])
+    return model
+
+def train_model(model, X_train, y_train, model_name):
+    checkpoint = ModelCheckpoint(f'best_{model_name}_model.h5', monitor='val_loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+    print(f"Starting {model_name} model training...")
+    history = model.fit(
+        X_train, y_train, 
+        epochs=50, 
+        batch_size=24, 
+        validation_split=0.2, 
+        callbacks=[checkpoint, early_stop]
+    )
+    return history
+
+def create_buy_model(df_with_indicators, symbols):
+    seq_length = localbns.seqlen
+    features = ['MACD', 'Bollinger_lband']
+    
+    def buy_target_function(data, symbol):
+        data['MACD_Change'] = data[f'{symbol}_MACD'].diff()
+        data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
+        data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.001) & 
+                          (data['Bollinger_Lower_Change'] > 0.005)).astype(int)
+        return data
+    
+    if not glob.glob('./chunks/buy_data_chunk_*.pkl'):
+        create_and_save_data(symbols, df_with_indicators, seq_length, features, buy_target_function, 'buy_')
+    
+    X_train, X_test, y_train, y_test = load_and_split_data('buy_')
+    model = create_model((seq_length, len(features)), loss='mean_absolute_error')
+    history = train_model(model, X_train, y_train, 'buy')
+    
+    print("Evaluating buy model...")
+    loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+    print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
+    
+    return model
+
+def create_sell_model(df_with_indicators, symbols):
+    seq_length = localbns.seqlen
+    features = ['EMA_5', 'SMA_5', 'ATR']
+    
+    def sell_target_function(data, symbol):
+        data = localbns.nplog(data)
+        data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].diff()
+        data[f'{symbol}_SMA_Change'] = data[f'{symbol}_SMA_5'].diff()
+        data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].diff()
+        data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.005) &
+                        (data[f'{symbol}_SMA_Change'].abs() < 0.005) &
+                        (data[f'{symbol}_ATR_Change'] > 0.003)).astype(int)
+        return data
+    
+    if not glob.glob('./chunks/sell_data_chunk_*.pkl'):
+        create_and_save_data(symbols, df_with_indicators, seq_length, features, sell_target_function, 'sell_')
+    
+    X_train, X_test, y_train, y_test = load_and_split_data('sell_')
+    model = create_model((seq_length, len(features)), loss='mean_absolute_error')
+    history = train_model(model, X_train, y_train, 'sell')
+    
+    print("Evaluating sell model...")
+    loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+    print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
+    
+    return model
+
+def finetune_model(model, X, y, model_name, epochs=50, batch_size=32):
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='val_loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
+    print(f"Fine-tuning {model_name} model...")
+    history = model.fit(
+        X, y, 
+        epochs=epochs, 
+        batch_size=batch_size, 
+        validation_split=0.2, 
+        callbacks=[checkpoint, early_stop]
+    )
+    return model, history
+
+def finetune_buy_model(symbol, df_with_indicators, original_model_path='buy_model_univ.h5'):
+    seq_length = localbns.seqlen
+    features = ['MACD', 'Bollinger_lband']
+    def buy_target_function(data, symbol):
+        data['MACD_Change'] = data[f'{symbol}_MACD'].diff()
+        data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
+        data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.001) & 
+                          (data['Bollinger_Lower_Change'] > 0.005)).astype(int)
+        return data
+    symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
+    symbol_data = localbns.normalize(symbol_data)
+    symbol_data = buy_target_function(symbol_data, symbol)
+    symbol_data.dropna(inplace=True)
+    
+    X, y = [], []
+    for i in range(len(symbol_data) - seq_length):
+        X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
+        y.append(symbol_data[f'{symbol}_Signal'].iloc[i+seq_length])
+    
+    X = np.array(X)
+    y = to_categorical(y, num_classes=12)
+    
+    model = load_model(original_model_path)
+    finetuned_model, history = finetune_model(model, X, y, f'buy_{symbol}')
+    
+    return finetuned_model
+
+def finetune_sell_model(symbol, df_with_indicators, original_model_path='sell_model_univ.h5'):
+    seq_length = localbns.seqlen
+    features = ['EMA_5', 'SMA_5', 'ATR']
+    
+    def sell_target_function(data, symbol):
+        data = localbns.nplog(data)
+        data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].diff()
+        data[f'{symbol}_SMA_Change'] = data[f'{symbol}_SMA_5'].diff()
+        data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].diff()
+        data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.005) &
+                        (data[f'{symbol}_SMA_Change'].abs() < 0.005) &
+                        (data[f'{symbol}_ATR_Change'] > 0.003)).astype(int)
+        return data
+    
+    symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
+    symbol_data = localbns.normalize(symbol_data)
+    symbol_data = sell_target_function(symbol_data, symbol)
+    symbol_data.dropna(inplace=True)
+    
+    X, y = [], []
+    for i in range(len(symbol_data) - seq_length):
+        X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
+        y.append(symbol_data[f'{symbol}_Signal'].iloc[i+seq_length])
+    
+    X = np.array(X)
+    y = to_categorical(y, num_classes=12)
+    
+    model = load_model(original_model_path)
+    finetuned_model, history = finetune_model(model, X, y, f'sell_{symbol}')
+    
+    return finetuned_model
+
+if __name__ == "__main__":
+    combined_prices = load_combined_prices('sp500_combined_close_prices.pkl')
+    symbols = list(combined_prices.columns)
+    if combined_prices is not None:
+        df_with_indicators = combined_prices.copy()
+        new_indicators = {}
+        for stock in df_with_indicators.columns:
+            temp_df = pd.DataFrame({
+                f'{stock}_Price': df_with_indicators[stock],
+                f'{stock}_High': df_with_indicators[stock],
+                f'{stock}_Low': df_with_indicators[stock],
+            })
+            temp_df = localbns.calculate_technical_indicators(temp_df, stock)
+            for indicator in localbns.features:
+                new_indicators[f'{stock}_{indicator}'] = temp_df[f'{stock}_{indicator}']
+        df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
+        df_with_indicators.to_pickle('sp500_combined_prices_with_indicators.pkl')
+        print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators.pkl'")
+        
+        buy_model = create_buy_model(df_with_indicators, symbols)
+        buy_model.save('buy_model_univ.h5')
+        
+        sell_model = create_sell_model(df_with_indicators, symbols)
+        sell_model.save('sell_model_univ.h5')
