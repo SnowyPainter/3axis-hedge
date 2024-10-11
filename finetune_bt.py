@@ -6,7 +6,7 @@ import utils
 import universial_model
 
 raw = utils.load_historical_data("XOM", "2022-01-01", "2024-01-01")
-raw = localbns.nplog(raw)
+#raw = localbns.nplog(raw)
 d = localbns.calculate_technical_indicators(raw, "XOM")
 universial_model.finetune_buy_model("XOM", d, 'LOCALBNS_buy_univ.h5')
 universial_model.finetune_sell_model("XOM", d, 'LOCALBNS_sell_univ.h5')
@@ -38,11 +38,10 @@ while True:
     if bt.bar >= 60:
         input_data = raw.iloc[bt.bar-60:bt.bar]  # Assuming 30 days of historical data for prediction
         buy_prediction, sell_prediction = localbns.predict(input_data, "XOM", buy_model, sell_model)
-        print(f"Buy prediction: {buy_prediction}\tSell prediction: {sell_prediction}")
-        if buy_prediction > 0.99 and buy_prediction > sell_prediction:
-            bt.buy("XOM", ratio=0.001)
-        elif sell_prediction > 0.9 and sell_prediction > buy_prediction:
-            bt.sell("XOM", ratio=0.001)
+        if buy_prediction > 0.5 and buy_prediction > sell_prediction:
+            bt.buy("XOM", ratio=0.1)
+        elif sell_prediction > 0.5 and sell_prediction > buy_prediction:
+            bt.sell("XOM", ratio=0.1)
 
 # Get and print results
 results = bt.get_result()

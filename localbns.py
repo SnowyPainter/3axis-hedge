@@ -51,24 +51,25 @@ def get_52_ba(df, symbol, max_attempts=20):
 
 features = ['SMA_5', 'EMA_5', 'RSI', 'MACD', 'Bollinger_hband', 'Bollinger_lband', 'ATR']
 def calculate_technical_indicators(df, symbol):
-    # Create a copy of the DataFrame to avoid SettingWithCopyWarning
     df = df.copy()
     
-    # Calculate technical indicators using .loc to avoid warnings
     df.loc[:, f'{symbol}_SMA_5'] = ta.trend.SMAIndicator(df[symbol+'_Price'], window=5).sma_indicator()
     df.loc[:, f'{symbol}_EMA_5'] = ta.trend.EMAIndicator(df[symbol+'_Price'], window=5).ema_indicator()
     df.loc[:, f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Price'], window=14).rsi()
     df.loc[:, f'{symbol}_MACD'] = ta.trend.MACD(df[symbol+'_Price']).macd()
     
-    # Calculate Bollinger Bands once and reuse the result
     bollinger = ta.volatility.BollingerBands(df[symbol+'_Price'])
     df.loc[:, f'{symbol}_Bollinger_hband'] = bollinger.bollinger_hband()
     df.loc[:, f'{symbol}_Bollinger_lband'] = bollinger.bollinger_lband()
     
     df.loc[:, f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Price'], window=14).average_true_range()
     
-    # Drop rows with NaN values
     df.dropna(inplace=True)
+    
+    # 각 지표를 정규화
+    for feature in features:
+        df[f'{symbol}_{feature}'] = (df[f'{symbol}_{feature}'] - df[f'{symbol}_{feature}'].mean()) / df[f'{symbol}_{feature}'].std()
+    
     return df
 
 def _calculate_macd(df, symbol):
@@ -100,22 +101,20 @@ def _calculate_atr(df, symbol, window=14):
 
 def predict(raw, symbol, buy_model=None, sell_model=None):
     tech = calculate_technical_indicators(raw, symbol).tail(seqlen)
-    macd = tech[symbol+"_MACD"].dropna()
-    bl = tech[symbol+'_Bollinger_lband'].dropna()
-    bu = tech[symbol+'_Bollinger_hband'].dropna()
-    sma = tech[symbol+'_SMA_5'].dropna()
-    ema = tech[symbol+'_EMA_5'].dropna()
-    atr = tech[symbol+'_ATR'].dropna()
-    buy_x = pd.concat([macd, bl], axis=1)
-    sell_x = pd.concat([ema, sma, atr], axis=1)
-    buy_x = np.expand_dims(buy_x.values, axis=0)
-    sell_x = np.expand_dims(sell_x.values, axis=0)
+    
+    buy_x = tech[[f'{symbol}_MACD', f'{symbol}_Bollinger_lband']].values
+    sell_x = tech[[f'{symbol}_EMA_5', f'{symbol}_ATR']].values
+    
+    buy_x = np.expand_dims(buy_x, axis=0)
+    sell_x = np.expand_dims(sell_x, axis=0)
+    
     buy_y, sell_y = None, None
     if buy_model is not None:
         buy_y = buy_model.predict(buy_x, verbose=0)[0][0]
     if sell_model is not None:
         sell_y = sell_model.predict(sell_x, verbose=0)[0][0]
     
+    print(f"Buy prediction: {buy_y}, Sell prediction: {sell_y}")
     return buy_y, sell_y
 
 def create_buy_model(raw, symbol):

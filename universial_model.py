@@ -3,14 +3,15 @@ import pandas as pd
 import glob
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 import numpy as np
 import pickle
 import tensorflow as tf
 from tensorflow.keras.utils import Sequence
+from tensorflow.keras.regularizers import l2
 
 import localbns
 
@@ -122,16 +123,16 @@ def load_and_split_data(prefix, chunk_dir='./chunks'):
     print("Split completed")
     return X_train, X_test, y_train, y_test
 
-def create_model(input_shape, loss='mse'):
+def create_model(input_shape, loss='binary_crossentropy'):
     model = Sequential([
-        LSTM(128, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 증가
-        Dropout(0.3),
-        LSTM(64, activation='tanh', return_sequences=True),
-        Dropout(0.3),
-        LSTM(32, activation='tanh'),
+        LSTM(32, activation='tanh', return_sequences=True, input_shape=input_shape, kernel_regularizer=l2(0.01)),
+        Dropout(0.2),
+        LSTM(16, activation='tanh', kernel_regularizer=l2(0.01)),
+        Dropout(0.2),
+        Dense(8, activation='relu', kernel_regularizer=l2(0.01)),
         Dense(1, activation='sigmoid')
     ])
-    model.compile(optimizer=Adam(learning_rate=0.001), loss=loss, metrics=['mae' if loss == 'mse' else 'accuracy'])
+    model.compile(optimizer=Adam(learning_rate=0.0005), loss=loss, metrics=['accuracy'])
     return model
 
 class BalancedBatchGenerator(Sequence):
@@ -165,45 +166,44 @@ class BalancedBatchGenerator(Sequence):
         return self.X[batch_indexes], self.y[batch_indexes]
 
 def train_model(model, X_train, y_train, model_name):
-    # 훈련 데이터와 검증 데이터 분리
     X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
 
     checkpoint = ModelCheckpoint(f'LOCALBNS_{model_name}_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    early_stop = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=0.00001)
 
     print(f"Starting {model_name} model training...")
     
-    # 훈련 데이터와 검증 데이터에 대한 균형 잡힌 배치 생성기 사용
     train_generator = BalancedBatchGenerator(X_train, y_train, batch_size=32)
     val_generator = BalancedBatchGenerator(X_val, y_val, batch_size=32)
     
     history = model.fit(
         train_generator,
-        epochs=100,
+        epochs=150,
         steps_per_epoch=len(train_generator),
         validation_data=val_generator,
         validation_steps=len(val_generator),
-        callbacks=[checkpoint, early_stop]
+        callbacks=[checkpoint, early_stop, reduce_lr]
     )
     return history
 
 def sell_target_function(data, symbol):
-    data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].diff()
-    data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].diff()
-    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.01) &
-                    (data[f'{symbol}_ATR_Change'] > 0.005)).astype(int)
+    data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].pct_change()
+    data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].pct_change()
+    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.003) &
+                    (data[f'{symbol}_ATR_Change'] > 0.003)).astype(int)
     data.dropna(inplace=True)
     return data
 
 def buy_target_function(data, symbol):
-    data['MACD_Change'] = data[f'{symbol}_MACD'].diff()
-    data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
-    data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.005) & 
-                      (data['Bollinger_Lower_Change'] > 0.02)).astype(int)
+    data['MACD_Change'] = data[f'{symbol}_MACD'].pct_change()
+    data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].pct_change()
+    data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.001) & 
+                      (data['Bollinger_Lower_Change'] < -0.005)).astype(int)
     return data
 
 buy_features = ['MACD', 'Bollinger_lband']
-sell_features = ['EMA_5', 'SMA_5', 'ATR']
+sell_features = ['EMA_5', 'ATR']
 
 def create_buy_model(df_with_indicators, symbols):
     seq_length = localbns.seqlen
@@ -214,10 +214,7 @@ def create_buy_model(df_with_indicators, symbols):
     
     X_train, X_test, y_train, y_test = load_and_split_data('buy_')
     
-    # 데이터 불균형 확인
-    unique, counts = np.unique(y_train, return_counts=True)
-    print("Class distribution in training data:", dict(zip(unique, counts)))
-    
+
     model = create_model((seq_length, len(features)), loss='binary_crossentropy')
     history = train_model(model, X_train, y_train, 'buy')
     
@@ -241,10 +238,6 @@ def create_sell_model(df_with_indicators, symbols):
     
     X_train, X_test, y_train, y_test = load_and_split_data('sell_')
     
-    # 데이터 불균형 확인
-    unique, counts = np.unique(y_train, return_counts=True)
-    print("Class distribution in training data:", dict(zip(unique, counts)))
-
     model = create_model((seq_length, len(features)), loss='binary_crossentropy')
     history = train_model(model, X_train, y_train, 'sell')
     
@@ -260,20 +253,22 @@ def create_sell_model(df_with_indicators, symbols):
     return model
 
 def finetune_model(model, X, y, model_name, epochs=50, batch_size=32):
-    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='val_loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
 
     print(f"Fine-tuning {model_name} model...")
+    
+    train_generator = BalancedBatchGenerator(X, y, batch_size=batch_size)
+    
     history = model.fit(
-        X, y, 
-        epochs=epochs, 
-        batch_size=batch_size, 
-        validation_split=0.2, 
+        train_generator,
+        epochs=epochs,
+        steps_per_epoch=len(train_generator),
         callbacks=[checkpoint, early_stop]
     )
     return model, history
 
-def finetune_buy_model(symbol, df_with_indicators, original_model_path='buy_model_univ.h5'):
+def finetune_buy_model(symbol, df_with_indicators, original_model_path='LOCALBNS_buy_univ.h5'):
     seq_length = localbns.seqlen
     features = buy_features
     symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
@@ -292,7 +287,7 @@ def finetune_buy_model(symbol, df_with_indicators, original_model_path='buy_mode
     
     return finetuned_model
 
-def finetune_sell_model(symbol, df_with_indicators, original_model_path='sell_model_univ.h5'):
+def finetune_sell_model(symbol, df_with_indicators, original_model_path='LOCALBNS_sell_univ.h5'):
     seq_length = localbns.seqlen
     features = sell_features
     symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
@@ -305,6 +300,7 @@ def finetune_sell_model(symbol, df_with_indicators, original_model_path='sell_mo
     
     X = np.array(X)
     y = np.array(y)
+    
     model = load_model(original_model_path)
     finetuned_model, history = finetune_model(model, X, y, f'sell_{symbol}')
     
@@ -313,7 +309,7 @@ def finetune_sell_model(symbol, df_with_indicators, original_model_path='sell_mo
 if __name__ == "__main__":
     create_pickle()
     combined_prices = load_combined_prices('sp500_combined_close_prices.pkl')
-    combined_prices = localbns.nplog(combined_prices)
+    #combined_prices = localbns.nplog(combined_prices)
     symbols = [col for col in combined_prices.columns if '_' not in col]
     if combined_prices is not None:
         df_with_indicators = combined_prices.copy()
