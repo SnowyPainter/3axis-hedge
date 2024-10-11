@@ -25,3 +25,4 @@ def buy_target_function(data, symbol):
 buy_features = ['MACD', 'Bollinger_lband']
 sell_features = ['EMA_5', 'SMA_5', 'ATR']
 ```
+9. 양성/음성 샘플 중에 적은거 over sampling (Balanced Batch)

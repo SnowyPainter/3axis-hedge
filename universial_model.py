@@ -9,6 +9,8 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 import numpy as np
 import pickle
+import tensorflow as tf
+from tensorflow.keras.utils import Sequence
 
 import localbns
 
@@ -123,25 +125,64 @@ def load_and_split_data(prefix, chunk_dir='./chunks'):
 def create_model(input_shape, loss='mse'):
     model = Sequential([
         LSTM(128, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 증가
-        Dropout(0.5),
+        Dropout(0.3),
         LSTM(64, activation='tanh', return_sequences=True),
-        Dropout(0.5),
+        Dropout(0.3),
         LSTM(32, activation='tanh'),
         Dense(1, activation='sigmoid')
     ])
     model.compile(optimizer=Adam(learning_rate=0.001), loss=loss, metrics=['mae' if loss == 'mse' else 'accuracy'])
     return model
 
+class BalancedBatchGenerator(Sequence):
+    def __init__(self, X, y, batch_size=32):
+        self.X = X
+        self.y = y
+        self.batch_size = batch_size
+        
+        self.positive_indexes = np.where(y == 1)[0]
+        self.negative_indexes = np.where(y == 0)[0]
+        self.n_positive = len(self.positive_indexes)
+        self.n_negative = len(self.negative_indexes)
+        
+        # 양성 샘플 수와 음성 샘플 수 중 작은 값을 선택
+        self.samples_per_class = min(self.n_positive, self.n_negative, self.batch_size // 2)
+    
+    def __len__(self):
+        return int(np.ceil(len(self.X) / self.batch_size))
+    
+    def __getitem__(self, idx):
+        batch_size = min(self.batch_size, len(self.X) - idx * self.batch_size)
+        n_pos = min(self.samples_per_class, batch_size // 2)
+        n_neg = batch_size - n_pos
+        
+        positive_samples = np.random.choice(self.positive_indexes, size=n_pos, replace=True)
+        negative_samples = np.random.choice(self.negative_indexes, size=n_neg, replace=True)
+        
+        batch_indexes = np.concatenate([positive_samples, negative_samples])
+        np.random.shuffle(batch_indexes)
+        
+        return self.X[batch_indexes], self.y[batch_indexes]
+
 def train_model(model, X_train, y_train, model_name):
+    # 훈련 데이터와 검증 데이터 분리
+    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
+
     checkpoint = ModelCheckpoint(f'LOCALBNS_{model_name}_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
     print(f"Starting {model_name} model training...")
+    
+    # 훈련 데이터와 검증 데이터에 대한 균형 잡힌 배치 생성기 사용
+    train_generator = BalancedBatchGenerator(X_train, y_train, batch_size=32)
+    val_generator = BalancedBatchGenerator(X_val, y_val, batch_size=32)
+    
     history = model.fit(
-        X_train, y_train, 
-        epochs=50, 
-        batch_size=24, 
-        validation_split=0.2, 
+        train_generator,
+        epochs=100,
+        steps_per_epoch=len(train_generator),
+        validation_data=val_generator,
+        validation_steps=len(val_generator),
         callbacks=[checkpoint, early_stop]
     )
     return history
@@ -172,12 +213,22 @@ def create_buy_model(df_with_indicators, symbols):
         create_and_save_data(symbols, df_with_indicators, seq_length, features, buy_target_function, 'buy_')
     
     X_train, X_test, y_train, y_test = load_and_split_data('buy_')
-    model = create_model((seq_length, len(features)), loss='mse')
+    
+    # 데이터 불균형 확인
+    unique, counts = np.unique(y_train, return_counts=True)
+    print("Class distribution in training data:", dict(zip(unique, counts)))
+    
+    model = create_model((seq_length, len(features)), loss='binary_crossentropy')
     history = train_model(model, X_train, y_train, 'buy')
     
     print("Evaluating buy model...")
     loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
     print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
+    
+    # 예측 분포 출력
+    predictions = model.predict(X_test)
+    print("Prediction distribution:")
+    print(pd.Series(predictions.flatten()).describe())
     
     return model
 
@@ -189,14 +240,22 @@ def create_sell_model(df_with_indicators, symbols):
         create_and_save_data(symbols, df_with_indicators, seq_length, features, sell_target_function, 'sell_')
     
     X_train, X_test, y_train, y_test = load_and_split_data('sell_')
+    
+    # 데이터 불균형 확인
+    unique, counts = np.unique(y_train, return_counts=True)
+    print("Class distribution in training data:", dict(zip(unique, counts)))
 
-    model = create_model((seq_length, len(features)), loss='mse')
+    model = create_model((seq_length, len(features)), loss='binary_crossentropy')
     history = train_model(model, X_train, y_train, 'sell')
     
     print("Evaluating sell model...")
     loss, accuracy = model.evaluate(X_test, y_test, verbose=1)
-    print(model.predict(X_train))
     print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
+    
+    # 예측 분포 출력
+    predictions = model.predict(X_test)
+    print("Prediction distribution:")
+    print(pd.Series(predictions.flatten()).describe())
     
     return model
 

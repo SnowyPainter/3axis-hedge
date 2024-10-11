@@ -39,10 +39,10 @@ while True:
         input_data = raw.iloc[bt.bar-60:bt.bar]  # Assuming 30 days of historical data for prediction
         buy_prediction, sell_prediction = localbns.predict(input_data, "XOM", buy_model, sell_model)
         print(f"Buy prediction: {buy_prediction}\tSell prediction: {sell_prediction}")
-        if buy_prediction > 0.9 and buy_prediction > sell_prediction:
-            bt.buy("XOM", ratio=0.1)
+        if buy_prediction > 0.99 and buy_prediction > sell_prediction:
+            bt.buy("XOM", ratio=0.001)
         elif sell_prediction > 0.9 and sell_prediction > buy_prediction:
-            bt.sell("XOM", ratio=0.1)
+            bt.sell("XOM", ratio=0.001)
 
 # Get and print results
 results = bt.get_result()
