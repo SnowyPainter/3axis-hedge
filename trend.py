@@ -28,7 +28,7 @@ def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combin
     for file in csv_files:
         df = pd.read_csv(file)
         stock_name = os.path.basename(file).split('.')[0]
-        df = df[['Date', 'Close', 'High', 'Low']]
+        df = df[['Date', 'Close', 'Volume', 'High', 'Low']]
         df['Close'] = df['Close'].astype(float)
         df['High'] = df['High'].astype(float)
         df['Low'] = df['Low'].astype(float)
@@ -57,8 +57,6 @@ def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combin
 def load_combined_prices(pickle):
     try:
         df = pd.read_pickle(pickle)
-        print(f"Successfully loaded combined close prices from {pickle}")
-        print(f"\nShape of the DataFrame: {df.shape}")
         return df
     except FileNotFoundError:
         print(f"Error: '{pickle}' not found. Please run create_pickle() first.")
@@ -73,19 +71,15 @@ def save_data_chunk(X, y, prefix, chunk_dir='./chunks'):
 def process_symbol_data(symbol, df_with_indicators, seq_length, features, target_function):
     print(f"Processing {symbol}...")
     data = df_with_indicators[[f'{symbol}'] + [f'{symbol}_{feature}' for feature in features]].copy()
+    data = localbns.normalize(data)
+    
     data = target_function(data, symbol)
     data.dropna(inplace=True)
-
+    
     symbol_X, symbol_y = [], []
     for i in range(len(data) - seq_length):
         symbol_X.append(data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
         symbol_y.append(data[f'{symbol}_Signal'].iloc[i+seq_length])
-    
-    # Count the number of 1's and 0's in symbol_y
-    ones_count = sum(symbol_y)
-    zeros_count = len(symbol_y) - ones_count
-    
-    print(f"{symbol} : Number of 1's: {ones_count}, Number of 0's: {zeros_count}")
     
     print(f"{symbol} : Preprocessed")
     return symbol_X, symbol_y
@@ -120,23 +114,25 @@ def load_and_split_data(prefix, chunk_dir='./chunks'):
     print("Split completed")
     return X_train, X_test, y_train, y_test
 
+# 모델 생성 함수
 def create_model(input_shape, loss='mse'):
     model = Sequential([
         LSTM(128, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 증가
-        Dropout(0.5),
+        Dropout(0.4),
         LSTM(64, activation='tanh', return_sequences=True),
-        Dropout(0.5),
+        Dropout(0.4),
         LSTM(32, activation='tanh'),
         Dense(1, activation='sigmoid')
     ])
-    model.compile(optimizer=Adam(learning_rate=0.001), loss=loss, metrics=['mae' if loss == 'mse' else 'accuracy'])
+    model.compile(optimizer=Adam(learning_rate=0.0003), loss=loss, metrics=['accuracy'])
     return model
 
-def train_model(model, X_train, y_train, model_name):
-    checkpoint = ModelCheckpoint(f'LOCALBNS_{model_name}_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+# 학습 함수
+def train_model(model, X_train, y_train):
+    checkpoint = ModelCheckpoint(f'TREND_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
-    print(f"Starting {model_name} model training...")
+    print(f"Starting trend model training...")
     history = model.fit(
         X_train, y_train, 
         epochs=50, 
@@ -146,139 +142,75 @@ def train_model(model, X_train, y_train, model_name):
     )
     return history
 
-def sell_target_function(data, symbol):
-    data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].diff()
-    data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].diff()
-    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.01) &
-                    (data[f'{symbol}_ATR_Change'] > 0.005)).astype(int)
-    data.dropna(inplace=True)
+# 신호 계산 함수 (며칠 내에 오르면 신호로 처리)
+def trend_target_function(data, symbol, lookahead_days=7):
+    data[f'{symbol}_Price_Change'] = data[f'{symbol}'].pct_change(lookahead_days)
+    data[f'{symbol}_Signal'] = (data[f'{symbol}_Price_Change'] > 0).astype(int)
     return data
 
-def buy_target_function(data, symbol):
-    data['MACD_Change'] = data[f'{symbol}_MACD'].diff()
-    data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
-    data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.005) & 
-                      (data['Bollinger_Lower_Change'] > 0.02)).astype(int)
-    return data
-
-buy_features = ['MACD', 'Bollinger_lband']
-sell_features = ['EMA_5', 'SMA_5', 'ATR']
-
-def create_buy_model(df_with_indicators, symbols):
-    seq_length = localbns.seqlen
-    features = buy_features
+# 학습 데이터 준비 함수 (기존 틀 유지)
+seq_length = 60
+def create_TREND_model(df_with_indicators, symbols):
+    features = ['EMA_12', 'RSI', 'MACD', 'Bollinger_band_diff', 'ATR']
     
-    if not glob.glob('./chunks/buy_data_chunk_*.pkl'):
-        create_and_save_data(symbols, df_with_indicators, seq_length, features, buy_target_function, 'buy_')
+    if not glob.glob('./chunks/trend_data_chunk_*.pkl'):
+        create_and_save_data(symbols, df_with_indicators, seq_length, features, trend_target_function, 'trend_')
     
-    X_train, X_test, y_train, y_test = load_and_split_data('buy_')
-    model = create_model((seq_length, len(features)), loss='mse')
-    history = train_model(model, X_train, y_train, 'buy')
+    X_train, X_test, y_train, y_test = load_and_split_data('trend_')
     
-    print("Evaluating buy model...")
+    # 모델 생성 및 학습
+    model = create_model((seq_length, len(features)), loss='binary_crossentropy')
+    history = train_model(model, X_train, y_train)
+    
+    # 모델 평가
+    print("Evaluating trend model...")
     loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
     print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
     
     return model
 
-def create_sell_model(df_with_indicators, symbols):
-    seq_length = localbns.seqlen
-    features = sell_features
-    
-    if not glob.glob('./chunks/sell_data_chunk_*.pkl'):
-        create_and_save_data(symbols, df_with_indicators, seq_length, features, sell_target_function, 'sell_')
-    
-    X_train, X_test, y_train, y_test = load_and_split_data('sell_')
-
-    model = create_model((seq_length, len(features)), loss='mse')
-    history = train_model(model, X_train, y_train, 'sell')
-    
-    print("Evaluating sell model...")
-    loss, accuracy = model.evaluate(X_test, y_test, verbose=1)
-    print(model.predict(X_train))
-    print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
-    
-    return model
-
-def finetune_model(model, X, y, model_name, epochs=50, batch_size=32):
-    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='val_loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-
-    print(f"Fine-tuning {model_name} model...")
-    history = model.fit(
-        X, y, 
-        epochs=epochs, 
-        batch_size=batch_size, 
-        validation_split=0.2, 
-        callbacks=[checkpoint, early_stop]
-    )
-    return model, history
-
-def finetune_buy_model(symbol, df_with_indicators, original_model_path='buy_model_univ.h5'):
-    seq_length = localbns.seqlen
-    features = buy_features
-    symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
-    symbol_data = buy_target_function(symbol_data, symbol)
-
-    X, y = [], []
-    for i in range(len(symbol_data) - seq_length):
-        X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
-        y.append(symbol_data[f'{symbol}_Signal'].iloc[i+seq_length])
-
-    X = np.array(X)
-    y = np.array(y)
-    
-    model = load_model(original_model_path)
-    finetuned_model, history = finetune_model(model, X, y, f'buy_{symbol}')
-    
-    return finetuned_model
-
-def finetune_sell_model(symbol, df_with_indicators, original_model_path='sell_model_univ.h5'):
-    seq_length = localbns.seqlen
-    features = sell_features
-    symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
-    symbol_data = sell_target_function(symbol_data, symbol)
-    
-    X, y = [], []
-    for i in range(len(symbol_data) - seq_length):
-        X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
-        y.append(symbol_data[f'{symbol}_Signal'].iloc[i+seq_length])
-    
-    X = np.array(X)
-    y = np.array(y)
-    model = load_model(original_model_path)
-    finetuned_model, history = finetune_model(model, X, y, f'sell_{symbol}')
-    
-    return finetuned_model
+import ta
+features = ['SMA_12', 'EMA_12', 'RSI', 'MACD', 'Bollinger_hband', 'Bollinger_lband', 'ATR', 'Bollinger_band_diff']
+def calculate_technical_indicators(df, symbol):
+    df[f'{symbol}_SMA_12'] = ta.trend.SMAIndicator(df[symbol+'_Price'], window=12).sma_indicator()
+    df[f'{symbol}_EMA_12'] = ta.trend.EMAIndicator(df[symbol+'_Price'], window=12).ema_indicator()
+    df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Price'], window=24).rsi()
+    df[f'{symbol}_MACD'] = ta.trend.MACD(df[symbol+'_Price']).macd()
+    df[f'{symbol}_Bollinger_hband'] = ta.volatility.BollingerBands(df[symbol+'_Price']).bollinger_hband()
+    df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Price']).bollinger_lband()
+    df[f'{symbol}_Bollinger_band_diff'] = df[f'{symbol}_Bollinger_hband'] - df[f'{symbol}_Bollinger_lband']
+    df[f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Price'], window=14).average_true_range()
+    df.dropna(inplace=True)
+    return df
 
 if __name__ == "__main__":
     create_pickle()
+    
     combined_prices = load_combined_prices('sp500_combined_close_prices.pkl')
-    combined_prices = localbns.nplog(combined_prices)
+    import utils
+    market = utils.load_historical_data("^IXIC", "2010-01-01", "2024-01-01", interval='1d')
+    combined_prices.index = pd.to_datetime(combined_prices.index)
+    market.index = pd.to_datetime(market.index)
+    combined_data = pd.merge(combined_prices, market, left_index=True, right_index=True, how='inner')
+    combined_data = combined_data.dropna()
+    combined_prices = combined_data
+    
     symbols = [col for col in combined_prices.columns if '_' not in col]
     if combined_prices is not None:
         df_with_indicators = combined_prices.copy()
         new_indicators = {}
-        for stock in df_with_indicators.columns:
+        for stock in symbols:
             temp_df = pd.DataFrame({
                 f'{stock}_Price': df_with_indicators[stock],
-                f'{stock}_High': df_with_indicators[stock],
-                f'{stock}_Low': df_with_indicators[stock],
+                f'{stock}_High': df_with_indicators[f"{stock}_High"],
+                f'{stock}_Low': df_with_indicators[f"{stock}_Low"],
+                f'{stock}_Volume' : df_with_indicators[f"{stock}_Volume"]
             })
-            temp_df = localbns.calculate_technical_indicators(temp_df, stock)
-            for indicator in localbns.features:
+            temp_df = calculate_technical_indicators(temp_df, stock)
+            for indicator in features:
                 new_indicators[f'{stock}_{indicator}'] = temp_df[f'{stock}_{indicator}']
         df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
-        df_with_indicators.to_pickle('sp500_combined_prices_with_indicators.pkl')
-        print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators.pkl'")
+        df_with_indicators.to_pickle('sp500_combined_prices_with_indicators_TREND.pkl')
+        print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators_TREND.pkl'")
         
-        buy_model = create_buy_model(df_with_indicators, symbols)
-        sell_model = create_sell_model(df_with_indicators, symbols)
-        
-        '''
-        import utils
-        raw = utils.load_historical_data("XOM", "2022-01-01", "2024-01-01")
-        d = localbns.calculate_technical_indicators(raw, "XOM")
-        finetune_buy_model("XOM", d, 'LOCALBNS_buy_univ.h5')
-        finetune_sell_model("XOM", d, 'LOCALBNS_sell_univ.h5')
-        '''
+        create_TREND_model(df_with_indicators, symbols)

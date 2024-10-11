@@ -15,9 +15,16 @@ def nplog(df):
     return data_log
 
 def normalize(df):
-    range_val = df.max() - df.min()
-    range_val[range_val == 0] = 1
-    return (df - df.min()) / (range_val)
+    scaler = MinMaxScaler()
+    return pd.DataFrame(scaler.fit_transform(df), columns=df.columns, index=df.index)
+
+from sklearn.preprocessing import MinMaxScaler
+
+def min_max_scale(df):
+    scaler = MinMaxScaler()
+    scaled_data = scaler.fit_transform(df)
+    return pd.DataFrame(scaled_data, columns=df.columns, index=df.index)
+
 
 def create_sequences(data, features, target, seq_length):
     print(data)
@@ -44,13 +51,23 @@ def get_52_ba(df, symbol, max_attempts=20):
 
 features = ['SMA_5', 'EMA_5', 'RSI', 'MACD', 'Bollinger_hband', 'Bollinger_lband', 'ATR']
 def calculate_technical_indicators(df, symbol):
-    df[f'{symbol}_SMA_5'] = ta.trend.SMAIndicator(df[symbol+'_Price'], window=5).sma_indicator()
-    df[f'{symbol}_EMA_5'] = ta.trend.EMAIndicator(df[symbol+'_Price'], window=5).ema_indicator()
-    df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Price'], window=14).rsi()
-    df[f'{symbol}_MACD'] = ta.trend.MACD(df[symbol+'_Price']).macd()
-    df[f'{symbol}_Bollinger_hband'] = ta.volatility.BollingerBands(df[symbol+'_Price']).bollinger_hband()
-    df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Price']).bollinger_lband()
-    df[f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Price'], window=14).average_true_range()
+    # Create a copy of the DataFrame to avoid SettingWithCopyWarning
+    df = df.copy()
+    
+    # Calculate technical indicators using .loc to avoid warnings
+    df.loc[:, f'{symbol}_SMA_5'] = ta.trend.SMAIndicator(df[symbol+'_Price'], window=5).sma_indicator()
+    df.loc[:, f'{symbol}_EMA_5'] = ta.trend.EMAIndicator(df[symbol+'_Price'], window=5).ema_indicator()
+    df.loc[:, f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Price'], window=14).rsi()
+    df.loc[:, f'{symbol}_MACD'] = ta.trend.MACD(df[symbol+'_Price']).macd()
+    
+    # Calculate Bollinger Bands once and reuse the result
+    bollinger = ta.volatility.BollingerBands(df[symbol+'_Price'])
+    df.loc[:, f'{symbol}_Bollinger_hband'] = bollinger.bollinger_hband()
+    df.loc[:, f'{symbol}_Bollinger_lband'] = bollinger.bollinger_lband()
+    
+    df.loc[:, f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Price'], window=14).average_true_range()
+    
+    # Drop rows with NaN values
     df.dropna(inplace=True)
     return df
 
@@ -81,8 +98,7 @@ def _calculate_atr(df, symbol, window=14):
     df['ATR'] = df['TR'].rolling(window=window).mean()
     return df
 
-def predict(raw, symbol, buy_model = None, sell_model = None):
-    raw = normalize(raw)
+def predict(raw, symbol, buy_model=None, sell_model=None):
     tech = calculate_technical_indicators(raw, symbol).tail(seqlen)
     macd = tech[symbol+"_MACD"].dropna()
     bl = tech[symbol+'_Bollinger_lband'].dropna()
@@ -95,10 +111,11 @@ def predict(raw, symbol, buy_model = None, sell_model = None):
     buy_x = np.expand_dims(buy_x.values, axis=0)
     sell_x = np.expand_dims(sell_x.values, axis=0)
     buy_y, sell_y = None, None
-    if not (buy_model is None):
+    if buy_model is not None:
         buy_y = buy_model.predict(buy_x, verbose=0)[0][0]
-    if not (sell_model is None):
+    if sell_model is not None:
         sell_y = sell_model.predict(sell_x, verbose=0)[0][0]
+    
     return buy_y, sell_y
 
 def create_buy_model(raw, symbol):
