@@ -125,14 +125,14 @@ def load_and_split_data(prefix, chunk_dir='./chunks'):
 
 def create_model(input_shape, loss='binary_crossentropy'):
     model = Sequential([
-        LSTM(32, activation='tanh', return_sequences=True, input_shape=input_shape, kernel_regularizer=l2(0.01)),
-        Dropout(0.2),
-        LSTM(16, activation='tanh', kernel_regularizer=l2(0.01)),
-        Dropout(0.2),
-        Dense(8, activation='relu', kernel_regularizer=l2(0.01)),
+        LSTM(64, activation='tanh', return_sequences=True, input_shape=input_shape, kernel_regularizer=l2(0.005)),
+        Dropout(0.3),
+        LSTM(32, activation='tanh', kernel_regularizer=l2(0.005)),
+        Dropout(0.3),
+        Dense(16, activation='relu', kernel_regularizer=l2(0.005)),
         Dense(1, activation='sigmoid')
     ])
-    model.compile(optimizer=Adam(learning_rate=0.0005), loss=loss, metrics=['accuracy'])
+    model.compile(optimizer=Adam(learning_rate=0.001), loss=loss, metrics=['accuracy'])
     return model
 
 class BalancedBatchGenerator(Sequence):
@@ -169,17 +169,17 @@ def train_model(model, X_train, y_train, model_name):
     X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
 
     checkpoint = ModelCheckpoint(f'LOCALBNS_{model_name}_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
-    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=0.00001)
+    early_stop = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, min_lr=0.00001)
 
     print(f"Starting {model_name} model training...")
     
-    train_generator = BalancedBatchGenerator(X_train, y_train, batch_size=32)
-    val_generator = BalancedBatchGenerator(X_val, y_val, batch_size=32)
+    train_generator = BalancedBatchGenerator(X_train, y_train, batch_size=64)
+    val_generator = BalancedBatchGenerator(X_val, y_val, batch_size=64)
     
     history = model.fit(
         train_generator,
-        epochs=150,
+        epochs=200,
         steps_per_epoch=len(train_generator),
         validation_data=val_generator,
         validation_steps=len(val_generator),
@@ -190,15 +190,15 @@ def train_model(model, X_train, y_train, model_name):
 def sell_target_function(data, symbol):
     data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].pct_change()
     data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].pct_change()
-    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.003) &
-                    (data[f'{symbol}_ATR_Change'] > 0.003)).astype(int)
+    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.005) &  # 0.003에서 0.005로 완화
+                    (data[f'{symbol}_ATR_Change'] > 0.002)).astype(int)  # 0.003에서 0.002로 완화
     data.dropna(inplace=True)
     return data
 
 def buy_target_function(data, symbol):
-    data['MACD_Change'] = data[f'{symbol}_MACD'].pct_change()
-    data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].pct_change()
-    data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.001) & 
+    data['MACD_Change'] = data[f'{symbol}_MACD'].diff()
+    data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
+    data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.005) & 
                       (data['Bollinger_Lower_Change'] < -0.005)).astype(int)
     return data
 
@@ -214,7 +214,6 @@ def create_buy_model(df_with_indicators, symbols):
     
     X_train, X_test, y_train, y_test = load_and_split_data('buy_')
     
-
     model = create_model((seq_length, len(features)), loss='binary_crossentropy')
     history = train_model(model, X_train, y_train, 'buy')
     
@@ -252,9 +251,10 @@ def create_sell_model(df_with_indicators, symbols):
     
     return model
 
-def finetune_model(model, X, y, model_name, epochs=50, batch_size=32):
+def finetune_model(model, X, y, model_name, epochs=100, batch_size=64):
     checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
+    early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, min_lr=0.00001)
 
     print(f"Fine-tuning {model_name} model...")
     
@@ -264,7 +264,7 @@ def finetune_model(model, X, y, model_name, epochs=50, batch_size=32):
         train_generator,
         epochs=epochs,
         steps_per_epoch=len(train_generator),
-        callbacks=[checkpoint, early_stop]
+        callbacks=[checkpoint, early_stop, reduce_lr]
     )
     return model, history
 
@@ -328,7 +328,7 @@ if __name__ == "__main__":
         print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators.pkl'")
         
         buy_model = create_buy_model(df_with_indicators, symbols)
-        sell_model = create_sell_model(df_with_indicators, symbols)
+        #sell_model = create_sell_model(df_with_indicators, symbols)
         
         '''
         import utils
