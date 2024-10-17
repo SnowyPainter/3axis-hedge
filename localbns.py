@@ -113,8 +113,6 @@ def predict(raw, symbol, buy_model=None, sell_model=None):
         buy_y = buy_model.predict(buy_x, verbose=0)[0][0]
     if sell_model is not None:
         sell_y = sell_model.predict(sell_x, verbose=0)[0][0]
-    
-    print(f"Buy prediction: {buy_y}, Sell prediction: {sell_y}")
     return buy_y, sell_y
 
 def create_buy_model(raw, symbol):

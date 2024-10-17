@@ -72,8 +72,6 @@ def process_symbol_data(symbol, df_with_indicators, seq_length, features, target
     data = df_with_indicators[[f'{symbol}'] + [f'{symbol}_{feature}' for feature in features]].copy()
     data = target_function(data, symbol)
     
-    data = localbns.normalize(data)
-    
     
     data.dropna(inplace=True)
     
@@ -82,7 +80,14 @@ def process_symbol_data(symbol, df_with_indicators, seq_length, features, target
         symbol_X.append(data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
         symbol_y.append(data[f'{symbol}_Signal'].iloc[i+seq_length])
     
+    
     print(f"{symbol} : Preprocessed")
+    
+    ones_count = sum(1 for i in symbol_y if i == 1)
+    zeros_count = sum(1 for i in symbol_y if i == 0)
+    twos_count = sum(1 for i in symbol_y if i == 2)
+    print(f"{symbol} : Number of 1's: {ones_count}, Number of 0's: {zeros_count}, Number of 2's: {twos_count}")
+    
     return symbol_X, symbol_y
 
 from sklearn.preprocessing import OneHotEncoder
@@ -110,13 +115,17 @@ def load_and_split_data(prefix, chunk_dir='./chunks'):
     
     X_all = np.concatenate(X_all, axis=0)
     y_all = np.concatenate(y_all, axis=0)
-    
+
+    # Check for NaN or infinite values and replace/remove them
+    X_all = np.nan_to_num(X_all, nan=0.0, posinf=1e10, neginf=-1e10)
+
     encoder = OneHotEncoder(sparse=False)
     y_all = encoder.fit_transform(np.array(y_all).reshape(-1, 1))
 
     print("Starting train-test split...")
     X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=42)
     print("Split completed")
+
     return X_train, X_test, y_train, y_test
 
 # 모델 생성 함수
@@ -132,28 +141,59 @@ def create_model(input_shape, loss='mse'):
     model.compile(optimizer=Adam(learning_rate=0.0003), loss=loss, metrics=['accuracy'])
     return model
 
+# GAP 타겟 함수
 def GAP_target_function(data, symbol, lookahead_days=1):
-    """
-    갭 상승 시 1, 갭 하락 시 0, 갭이 없을 시 2로 신호를 처리.
-    """
     data[f'{symbol}_Gap'] = data[f'{symbol}'].pct_change(lookahead_days).fillna(0)
     data[f'{symbol}_Signal'] = data[f'{symbol}_Gap'].apply(
         lambda x: 1 if x >= 0.05 else (0 if x <= -0.05 else 2)
     )
     return data
 
-# 학습 함수
-def train_model(model, X_train, y_train):
+import numpy as np
+from imblearn.over_sampling import SMOTE
+from sklearn.utils import class_weight
+from keras.callbacks import ModelCheckpoint, EarlyStopping
+
+def oversample_data(X, y):
+    """Applies SMOTE for oversampling."""
+    n_samples, timesteps, n_features = X.shape
+    X_reshaped = X.reshape(n_samples, timesteps * n_features)  # Flatten the data for SMOTE
+
+    smote = SMOTE()
+    X_resampled, y_resampled = smote.fit_resample(X_reshaped, y)
+    
+    # Reshape back to original dimensions
+    X_resampled = X_resampled.reshape(-1, timesteps, n_features)
+    
+    return X_resampled, y_resampled
+
+def train_model_with_oversampling(model, X_train, y_train):
+    X_train_resampled, y_train_resampled = oversample_data(X_train, y_train)
+
+    # Calculate class weights for balancing
+    y_train_1d = np.argmax(y_train_resampled, axis=1)  # Assuming y_train_resampled is one-hot encoded
+
+    # Calculate class weights for balancing
+    class_weights = class_weight.compute_class_weight(
+        'balanced',
+        classes=np.unique(y_train_1d),  # Use 1D class labels
+        y=y_train_1d
+    )
+    class_weight_dict = dict(enumerate(class_weights))
+    
+    print(f"Starting model training with oversampled data...")
+    
     checkpoint = ModelCheckpoint(f'GAP_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
-    print(f"Starting gap model training...")
+    print(f"Starting gap model training with oversampled data...")
     history = model.fit(
-        X_train, y_train, 
-        epochs=50, 
-        batch_size=24, 
-        validation_split=0.2, 
-        callbacks=[checkpoint, early_stop]
+        X_train_resampled, y_train_resampled,
+        epochs=50,
+        batch_size=48,
+        validation_split=0.2,
+        callbacks=[checkpoint, early_stop],
+        class_weight=class_weight_dict
     )
     return history
 
@@ -166,14 +206,15 @@ def create_GAP_model(df_with_indicators, symbols):
         create_and_save_data(symbols, df_with_indicators, seq_length, features, GAP_target_function, 'gap_')
     
     X_train, X_test, y_train, y_test = load_and_split_data('gap_')
-    
+
     model = create_model((seq_length, len(features)), loss='categorical_crossentropy')
-    history = train_model(model, X_train, y_train)
+    history = train_model_with_oversampling(model, X_train, y_train)
     print("Evaluating trend model...")
     loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
     print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
     
     return model
+
 
 import ta
 gap_features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size']
@@ -187,7 +228,9 @@ def calculate_technical_indicators(df, symbol):
     df[f'{symbol}_Volume_Change'] = df[symbol+'_Volume'].pct_change().fillna(0)
     df[f'{symbol}_Gap_Size'] = df[symbol+'_Price'].pct_change().fillna(0)
     df.dropna(inplace=True)
-    
+    for feature in gap_features:
+        df[f'{symbol}_{feature}'] = (df[f'{symbol}_{feature}'] - df[f'{symbol}_{feature}'].mean()) / df[f'{symbol}_{feature}'].std()
+        
     return df
 
 if __name__ == "__main__":
