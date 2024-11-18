@@ -1,8 +1,5 @@
 __pycache__
-*.keras
-*.h5
 /chunks
-/stock_market_data
 *.pkl
 AlgoShield/
 creators/

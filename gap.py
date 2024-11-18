@@ -5,7 +5,6 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 import numpy as np
 import pickle
@@ -28,11 +27,12 @@ def create_pickle(directory='./stock_market_data/sp500/', name = 'sp500_combined
     for file in csv_files:
         df = pd.read_csv(file)
         stock_name = os.path.basename(file).split('.')[0]
-        df = df[['Date', 'Close', 'Volume', 'High', 'Low']]
+        df = df[['Date', 'Open', 'Close','Volume', 'High', 'Low']]
+        df['Open'] = df['Open'].astype(float)
         df['Close'] = df['Close'].astype(float)
         df['Volume'] = df['Volume'].astype(float)
         df['Date'] = pd.to_datetime(df['Date'], format='%d-%m-%Y')  # Convert date format
-        df = df.rename(columns={'Close': stock_name, 'Volume': f"{stock_name}_Volume", 'High' : f"{stock_name}_High", 'Low' : f"{stock_name}_Low"})
+        df = df.rename(columns={'Open': f"{stock_name}_Open", 'Close': f"{stock_name}_Close", 'Volume': f"{stock_name}_Volume", 'High' : f"{stock_name}_High", 'Low' : f"{stock_name}_Low"})
         df.set_index('Date', inplace=True)
         if combined_df.empty:
             combined_df = df
@@ -69,7 +69,7 @@ def save_data_chunk(X, y, prefix, chunk_dir='./chunks'):
 
 def process_symbol_data(symbol, df_with_indicators, seq_length, features, target_function):
     print(f"Processing {symbol}...")
-    data = df_with_indicators[[f'{symbol}'] + [f'{symbol}_{feature}' for feature in features]].copy()
+    data = df_with_indicators[[f'{symbol}_Open'] + [f'{symbol}_{feature}' for feature in features]].copy()
     data = target_function(data, symbol)
     
     
@@ -131,28 +131,49 @@ def load_and_split_data(prefix, chunk_dir='./chunks'):
 # 모델 생성 함수
 def create_model(input_shape, loss='mse'):
     model = Sequential([
-        LSTM(256, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 수 증가
-        Dropout(0.5),
-        LSTM(128, activation='tanh', return_sequences=True),
-        Dropout(0.5),
-        LSTM(64, activation='tanh'),
+        LSTM(128, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 수 증가
+        Dropout(0.4),
+        LSTM(64, activation='tanh', return_sequences=True),
+        Dropout(0.4),
+        LSTM(32, activation='tanh'),
         Dense(3, activation='softmax')
     ])
-    model.compile(optimizer=Adam(learning_rate=0.0003), loss=loss, metrics=['accuracy'])
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
     return model
 
 # GAP 타겟 함수
 def GAP_target_function(data, symbol, lookahead_days=1):
-    data[f'{symbol}_Gap'] = data[f'{symbol}'].pct_change(lookahead_days).fillna(0)
-    data[f'{symbol}_Signal'] = data[f'{symbol}_Gap'].apply(
+    data[f'{symbol}_Signal'] = data[f'{symbol}_Gap_Size'].apply(
         lambda x: 1 if x >= 0.05 else (0 if x <= -0.05 else 2)
     )
     return data
 
 import numpy as np
-from imblearn.over_sampling import SMOTE
 from sklearn.utils import class_weight
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from keras.callbacks import ModelCheckpoint, EarlyStopping
+import smote_variants as sv
+
+import tensorflow as tf
+
+def focal_loss(gamma=2., alpha=0.25):
+    def focal_loss_fixed(y_true, y_pred):
+        # Convert y_true and y_pred to float32
+        y_true = tf.convert_to_tensor(y_true, dtype=tf.float32)
+        y_pred = tf.convert_to_tensor(y_pred, dtype=tf.float32)
+
+        # Calculate the focal loss
+        alpha_t = y_true * alpha + (1 - y_true) * (1 - alpha)  # Adjust alpha for each class
+        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)  # Probability for true class
+
+        # Focal loss formula
+        fl = -alpha_t * tf.pow((1 - p_t), gamma) * tf.math.log(p_t + 1e-8)
+        
+        return tf.reduce_mean(tf.reduce_sum(fl, axis=1))  # Mean loss across all samples
+    
+    return focal_loss_fixed
+
+from imblearn.over_sampling import SMOTE
 
 def oversample_data(X, y):
     """Applies SMOTE for oversampling."""
@@ -169,9 +190,12 @@ def oversample_data(X, y):
 
 def train_model_with_oversampling(model, X_train, y_train):
     X_train_resampled, y_train_resampled = oversample_data(X_train, y_train)
-
+    
+    X_train_resampled = X_train_resampled.astype(np.float32)
+    y_train_resampled = y_train_resampled.astype(np.float32)  # One-Hot 인코딩된 레이블
+    
     # Calculate class weights for balancing
-    y_train_1d = np.argmax(y_train_resampled, axis=1)  # Assuming y_train_resampled is one-hot encoded
+    y_train_1d = np.argmax(y_train, axis=1)  # Assuming y_train_resampled is one-hot encoded
 
     # Calculate class weights for balancing
     class_weights = class_weight.compute_class_weight(
@@ -193,9 +217,41 @@ def train_model_with_oversampling(model, X_train, y_train):
         batch_size=48,
         validation_split=0.2,
         callbacks=[checkpoint, early_stop],
-        class_weight=class_weight_dict
+        #class_weight=class_weight_dict
     )
     return history
+
+import numpy as np
+from sklearn.metrics import classification_report
+from tensorflow.keras.models import load_model
+from tensorflow import keras
+
+# 모델 로드 함수
+def load_model_with_error_handling(model_path):
+    
+    return keras.models.load_model(model_path)
+    
+    with keras.utils.custom_object_scope({'focal_loss_fixed': focal_loss()}):
+        loaded_model = keras.models.load_model(model_path)
+        return loaded_model
+
+# 평가 함수
+def evaluate_model(model, X_test, y_test):
+    try:
+        print("Evaluating trend model...")
+        loss, accuracy = model.evaluate(X_test, y_test, verbose=1)
+        print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
+
+        # 예측 및 추가 평가 지표
+        y_pred = np.argmax(model.predict(X_test), axis=1)  # 다중 클래스일 경우
+        y_true = np.argmax(y_test, axis=1)  # One-hot encoding일 경우
+
+        # 분류 보고서 출력
+        print("\nClassification Report:")
+        print(classification_report(y_true, y_pred))
+
+    except Exception as e:
+        print(f"Error during evaluation: {e}")
 
 # 학습 데이터 준비 함수 (기존 틀 유지)
 seq_length = 60
@@ -210,40 +266,50 @@ def create_GAP_model(df_with_indicators, symbols):
     model = create_model((seq_length, len(features)), loss='categorical_crossentropy')
     history = train_model_with_oversampling(model, X_train, y_train)
     print("Evaluating trend model...")
-    loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
-    print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
+    
+    model = load_model_with_error_handling('GAP_univ.h5')
+    evaluate_model(model, X_test, y_test)
     
     return model
 
 
 import ta
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
+
 gap_features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size']
+gap_features_normalized = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
 def calculate_technical_indicators(df, symbol):
-    df[f'{symbol}_EMA_12'] = ta.trend.EMAIndicator(df[symbol+'_Price'], window=12).ema_indicator()
-    df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Price'], window=14).rsi()
-    df[f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Price'], window=14).average_true_range()
-    df[f'{symbol}_Bollinger_hband'] = ta.volatility.BollingerBands(df[symbol+'_Price']).bollinger_hband()
-    df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Price']).bollinger_lband()
+    df[f'{symbol}_EMA_12'] = ta.trend.EMAIndicator(df[symbol+'_Open'], window=12).ema_indicator()
+    df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Open'], window=14).rsi()
+    df[f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Open'], window=14).average_true_range()
+    df[f'{symbol}_Bollinger_hband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_hband()
+    df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_lband()
     df[f'{symbol}_Bollinger_band_diff'] = df[f'{symbol}_Bollinger_hband'] - df[f'{symbol}_Bollinger_lband']
     df[f'{symbol}_Volume_Change'] = df[symbol+'_Volume'].pct_change().fillna(0)
-    df[f'{symbol}_Gap_Size'] = df[symbol+'_Price'].pct_change().fillna(0)
+    df[f'{symbol}_Gap_Size'] = (df[symbol+'_Close'] - df[symbol+'_Open']) / df[symbol+'_Open']
     df.dropna(inplace=True)
-    for feature in gap_features:
-        df[f'{symbol}_{feature}'] = (df[f'{symbol}_{feature}'] - df[f'{symbol}_{feature}'].mean()) / df[f'{symbol}_{feature}'].std()
-        
+    df.fillna(0, inplace=True)
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+    scaler = StandardScaler()
+    for feature in gap_features_normalized:
+        df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
+    
+    
     return df
 
 if __name__ == "__main__":
     create_pickle(name='sp500_combined_close_volume_prices.pkl')
     combined_prices = load_combined_prices('sp500_combined_close_volume_prices.pkl')
-    symbols = [col for col in combined_prices.columns if '_' not in col]
+    symbols = list(set(col.split('_')[0] for col in combined_prices.columns))
     
     if combined_prices is not None:
         df_with_indicators = combined_prices.copy()
         new_indicators = {}
         for stock in symbols:
             temp_df = pd.DataFrame({
-                f'{stock}_Price': df_with_indicators[stock],
+                f'{stock}_Open': df_with_indicators[f"{stock}_Open"],
+                f'{stock}_Close': df_with_indicators[f"{stock}_Close"],
                 f'{stock}_High': df_with_indicators[f"{stock}_High"],
                 f'{stock}_Low': df_with_indicators[f"{stock}_Low"],
                 f'{stock}_Volume' : df_with_indicators[f"{stock}_Volume"]
