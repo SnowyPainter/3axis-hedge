@@ -10,10 +10,26 @@ from tensorflow.keras.optimizers import Adam
 import numpy as np
 import pickle
 import tensorflow as tf
+from sklearn.metrics import classification_report
+from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import Sequence
 from tensorflow.keras.regularizers import l2
 
+from imblearn.over_sampling import SMOTE
 import localbns
+
+def oversample_data(X, y):
+    """Applies SMOTE for oversampling."""
+    n_samples, timesteps, n_features = X.shape
+    X_reshaped = X.reshape(n_samples, timesteps * n_features)  # Flatten the data for SMOTE
+
+    smote = SMOTE()
+    X_resampled, y_resampled = smote.fit_resample(X_reshaped, y)
+    
+    # Reshape back to original dimensions
+    X_resampled = X_resampled.reshape(-1, timesteps, n_features)
+    
+    return X_resampled, y_resampled
 
 def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combined_close_prices.pkl'):
     csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
@@ -31,10 +47,11 @@ def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combin
     for file in csv_files:
         df = pd.read_csv(file)
         stock_name = os.path.basename(file).split('.')[0]
-        df = df[['Date', 'Close', 'High', 'Low']]
+        df = df[['Date', 'Close', 'High', 'Low', 'Volume']]
         df['Close'] = df['Close'].astype(float)
         df['High'] = df['High'].astype(float)
         df['Low'] = df['Low'].astype(float)
+        df['Volume'] = df['Volume'].astype(float)
         df['Date'] = pd.to_datetime(df['Date'], format='%d-%m-%Y')  # Convert date format
         df = df.rename(columns={'Close': stock_name, 'Volume': f"{stock_name}_Volume", 'High' : f"{stock_name}_High", 'Low' : f"{stock_name}_Low"})
         df.set_index('Date', inplace=True)
@@ -72,6 +89,23 @@ def save_data_chunk(X, y, prefix, chunk_dir='./chunks'):
     chunk_id = len(glob.glob(os.path.join(chunk_dir, f'{prefix}data_chunk_*.pkl')))
     with open(os.path.join(chunk_dir, f'{prefix}data_chunk_{chunk_id}.pkl'), 'wb') as f:
         pickle.dump((np.array(X), np.array(y)), f)
+
+def evaluate_model(model, X_test, y_test):
+    try:
+        print("Evaluating trend model...")
+        loss, accuracy = model.evaluate(X_test, y_test, verbose=1)
+        print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
+
+        # 예측 및 추가 평가 지표
+        y_pred = np.argmax(model.predict(X_test), axis=1)  # 다중 클래스일 경우
+        y_true = np.argmax(y_test, axis=1)  # One-hot encoding일 경우
+
+        # 분류 보고서 출력
+        print("\nClassification Report:")
+        print(classification_report(y_true, y_pred))
+
+    except Exception as e:
+        print(f"Error during evaluation: {e}")
 
 def process_symbol_data(symbol, df_with_indicators, seq_length, features, target_function):
     print(f"Processing {symbol}...")
@@ -135,54 +169,20 @@ def create_model(input_shape, loss='binary_crossentropy'):
     model.compile(optimizer=Adam(learning_rate=0.001), loss=loss, metrics=['accuracy'])
     return model
 
-class BalancedBatchGenerator(Sequence):
-    def __init__(self, X, y, batch_size=32):
-        self.X = X
-        self.y = y
-        self.batch_size = batch_size
-        
-        self.positive_indexes = np.where(y == 1)[0]
-        self.negative_indexes = np.where(y == 0)[0]
-        self.n_positive = len(self.positive_indexes)
-        self.n_negative = len(self.negative_indexes)
-        
-        # 양성 샘플 수와 음성 샘플 수 중 작은 값을 선택
-        self.samples_per_class = min(self.n_positive, self.n_negative, self.batch_size // 2)
-    
-    def __len__(self):
-        return int(np.ceil(len(self.X) / self.batch_size))
-    
-    def __getitem__(self, idx):
-        batch_size = min(self.batch_size, len(self.X) - idx * self.batch_size)
-        n_pos = min(self.samples_per_class, batch_size // 2)
-        n_neg = batch_size - n_pos
-        
-        positive_samples = np.random.choice(self.positive_indexes, size=n_pos, replace=True)
-        negative_samples = np.random.choice(self.negative_indexes, size=n_neg, replace=True)
-        
-        batch_indexes = np.concatenate([positive_samples, negative_samples])
-        np.random.shuffle(batch_indexes)
-        
-        return self.X[batch_indexes], self.y[batch_indexes]
-
 def train_model(model, X_train, y_train, model_name):
     X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
 
-    checkpoint = ModelCheckpoint(f'LOCALBNS_{model_name}_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
-    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, min_lr=0.00001)
-
-    print(f"Starting {model_name} model training...")
+    checkpoint = ModelCheckpoint(f'LOCALBNS_{model_name}_univ.keras', monitor='val_loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
     
-    train_generator = BalancedBatchGenerator(X_train, y_train, batch_size=64)
-    val_generator = BalancedBatchGenerator(X_val, y_val, batch_size=64)
-    
+    X_train_resampled, y_train_resampled = oversample_data(X_train, y_train)
     history = model.fit(
-        train_generator,
-        epochs=200,
-        steps_per_epoch=len(train_generator),
-        validation_data=val_generator,
-        validation_steps=len(val_generator),
+        X_train_resampled, 
+        y_train_resampled,
+        epochs=50,
+        batch_size=32,
+        validation_data=(X_val, y_val),
         callbacks=[checkpoint, early_stop, reduce_lr]
     )
     return history
@@ -190,8 +190,8 @@ def train_model(model, X_train, y_train, model_name):
 def sell_target_function(data, symbol):
     data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].pct_change()
     data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].pct_change()
-    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.005) &  # 0.003에서 0.005로 완화
-                    (data[f'{symbol}_ATR_Change'] > 0.002)).astype(int)  # 0.003에서 0.002로 완화
+    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.001) &
+                    (data[f'{symbol}_ATR_Change'] > 0.01)).astype(int)
     data.dropna(inplace=True)
     return data
 
@@ -202,8 +202,8 @@ def buy_target_function(data, symbol):
                       (data['Bollinger_Lower_Change'] < -0.005)).astype(int)
     return data
 
-buy_features = ['MACD', 'Bollinger_lband']
-sell_features = ['EMA_5', 'ATR']
+buy_features = ['MACD', 'Bollinger_lband', 'RSI', 'EMA_5', 'Volume_Change']
+sell_features = ['SMA_5', 'EMA_5', 'ATR', 'RSI', 'Volume_Change']
 
 def create_buy_model(df_with_indicators, symbols):
     seq_length = localbns.seqlen
@@ -215,6 +215,7 @@ def create_buy_model(df_with_indicators, symbols):
     X_train, X_test, y_train, y_test = load_and_split_data('buy_')
     
     model = create_model((seq_length, len(features)), loss='binary_crossentropy')
+    
     history = train_model(model, X_train, y_train, 'buy')
     
     print("Evaluating buy model...")
@@ -225,7 +226,9 @@ def create_buy_model(df_with_indicators, symbols):
     predictions = model.predict(X_test)
     print("Prediction distribution:")
     print(pd.Series(predictions.flatten()).describe())
-    
+
+    #evaluate_model(model, X_test, y_test)
+
     return model
 
 def create_sell_model(df_with_indicators, symbols):
@@ -249,26 +252,28 @@ def create_sell_model(df_with_indicators, symbols):
     print("Prediction distribution:")
     print(pd.Series(predictions.flatten()).describe())
     
+    #evaluate_model(model, X_test, y_test)
+
     return model
 
 def finetune_model(model, X, y, model_name, epochs=100, batch_size=64):
-    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.keras', monitor='loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, min_lr=0.00001)
-
+    X_train_resampled, y_train_resampled = oversample_data(X, y)
     print(f"Fine-tuning {model_name} model...")
     
-    train_generator = BalancedBatchGenerator(X, y, batch_size=batch_size)
-    
     history = model.fit(
-        train_generator,
+        X_train_resampled,
+        y_train_resampled, 
         epochs=epochs,
-        steps_per_epoch=len(train_generator),
+        batch_size=batch_size,
+        validation_split=0.2,
         callbacks=[checkpoint, early_stop, reduce_lr]
     )
     return model, history
 
-def finetune_buy_model(symbol, df_with_indicators, original_model_path='LOCALBNS_buy_univ.h5'):
+def finetune_buy_model(symbol, df_with_indicators, original_model_path='LOCALBNS_buy_univ.keras'):
     seq_length = localbns.seqlen
     features = buy_features
     symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
@@ -287,7 +292,7 @@ def finetune_buy_model(symbol, df_with_indicators, original_model_path='LOCALBNS
     
     return finetuned_model
 
-def finetune_sell_model(symbol, df_with_indicators, original_model_path='LOCALBNS_sell_univ.h5'):
+def finetune_sell_model(symbol, df_with_indicators, original_model_path='LOCALBNS_sell_univ.keras'):
     seq_length = localbns.seqlen
     features = sell_features
     symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
@@ -314,11 +319,15 @@ if __name__ == "__main__":
     if combined_prices is not None:
         df_with_indicators = combined_prices.copy()
         new_indicators = {}
-        for stock in df_with_indicators.columns:
+        symbols = set()
+        for col in combined_prices.columns:
+            symbols.add(col.split('_')[0])
+        for stock in symbols:
             temp_df = pd.DataFrame({
-                f'{stock}_Price': df_with_indicators[stock],
-                f'{stock}_High': df_with_indicators[stock],
-                f'{stock}_Low': df_with_indicators[stock],
+                f'{stock}_Price': df_with_indicators[f"{stock}"],
+                f'{stock}_High': df_with_indicators[f"{stock}_High"],
+                f'{stock}_Low': df_with_indicators[f"{stock}_Low"],
+                f'{stock}_Volume' : df_with_indicators[f"{stock}_Volume"]
             })
             temp_df = localbns.calculate_technical_indicators(temp_df, stock)
             for indicator in localbns.features:
@@ -327,13 +336,14 @@ if __name__ == "__main__":
         df_with_indicators.to_pickle('sp500_combined_prices_with_indicators.pkl')
         print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators.pkl'")
         
-        buy_model = create_buy_model(df_with_indicators, symbols)
-        #sell_model = create_sell_model(df_with_indicators, symbols)
+        #buy_model = create_buy_model(df_with_indicators, symbols)
+        sell_model = create_sell_model(df_with_indicators, symbols)
         
-        '''
-        import utils
-        raw = utils.load_historical_data("XOM", "2022-01-01", "2024-01-01")
-        d = localbns.calculate_technical_indicators(raw, "XOM")
-        finetune_buy_model("XOM", d, 'LOCALBNS_buy_univ.h5')
-        finetune_sell_model("XOM", d, 'LOCALBNS_sell_univ.h5')
-        '''
+        
+        
+        #import utils
+        #raw = utils.load_historical_data("XOM", "2022-01-01", "2024-01-01")
+        #d = localbns.calculate_technical_indicators(raw, "XOM")
+        #finetune_buy_model("XOM", d, 'LOCALBNS_buy_univ.keras')
+        #finetune_sell_model("XOM", d, 'LOCALBNS_sell_univ.keras')
+        

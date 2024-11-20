@@ -49,7 +49,7 @@ def get_52_ba(df, symbol, max_attempts=20):
 
     return find_max_price(df, symbol, attempt=1)
 
-features = ['SMA_5', 'EMA_5', 'RSI', 'MACD', 'Bollinger_hband', 'Bollinger_lband', 'ATR']
+features = ['SMA_5', 'EMA_5', 'RSI', 'MACD', 'Bollinger_hband', 'Bollinger_lband', 'ATR', 'Volume_Change']
 def calculate_technical_indicators(df, symbol):
     df = df.copy()
     
@@ -57,15 +57,14 @@ def calculate_technical_indicators(df, symbol):
     df.loc[:, f'{symbol}_EMA_5'] = ta.trend.EMAIndicator(df[symbol+'_Price'], window=5).ema_indicator()
     df.loc[:, f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Price'], window=14).rsi()
     df.loc[:, f'{symbol}_MACD'] = ta.trend.MACD(df[symbol+'_Price']).macd()
-    
     bollinger = ta.volatility.BollingerBands(df[symbol+'_Price'])
     df.loc[:, f'{symbol}_Bollinger_hband'] = bollinger.bollinger_hband()
     df.loc[:, f'{symbol}_Bollinger_lband'] = bollinger.bollinger_lband()
-    
     df.loc[:, f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Price'], window=14).average_true_range()
-    
+    df[f'{symbol}_Volume_Change'] = df[symbol+'_Volume'].pct_change().fillna(0)
     df.dropna(inplace=True)
-    
+    df.fillna(0, inplace=True)
+    df.replace([np.inf, -np.inf], 0, inplace=True)
     # 각 지표를 정규화
     for feature in features:
         df[f'{symbol}_{feature}'] = (df[f'{symbol}_{feature}'] - df[f'{symbol}_{feature}'].mean()) / df[f'{symbol}_{feature}'].std()
