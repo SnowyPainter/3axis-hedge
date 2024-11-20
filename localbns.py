@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import ta 
 
-seqlen = 30
+seqlen = 100
 
 def nplog(df):
     data_log = df.apply(lambda x: np.log(x + 1))

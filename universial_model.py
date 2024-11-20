@@ -159,11 +159,11 @@ def load_and_split_data(prefix, chunk_dir='./chunks'):
 
 def create_model(input_shape, loss='binary_crossentropy'):
     model = Sequential([
-        LSTM(64, activation='tanh', return_sequences=True, input_shape=input_shape, kernel_regularizer=l2(0.005)),
-        Dropout(0.3),
-        LSTM(32, activation='tanh', kernel_regularizer=l2(0.005)),
-        Dropout(0.3),
-        Dense(16, activation='relu', kernel_regularizer=l2(0.005)),
+        LSTM(128, activation='tanh', return_sequences=True, input_shape=input_shape, kernel_regularizer=l2(0.005)),
+        Dropout(0.5),
+        LSTM(64, activation='tanh', kernel_regularizer=l2(0.005)),
+        Dropout(0.4),
+        Dense(32, activation='relu', kernel_regularizer=l2(0.005)),
         Dense(1, activation='sigmoid')
     ])
     model.compile(optimizer=Adam(learning_rate=0.001), loss=loss, metrics=['accuracy'])
@@ -202,7 +202,7 @@ def buy_target_function(data, symbol):
                       (data['Bollinger_Lower_Change'] < -0.005)).astype(int)
     return data
 
-buy_features = ['MACD', 'Bollinger_lband', 'RSI', 'EMA_5', 'Volume_Change']
+buy_features = ['MACD', 'Bollinger_lband', 'Volume_Change']
 sell_features = ['SMA_5', 'EMA_5', 'ATR', 'RSI', 'Volume_Change']
 
 def create_buy_model(df_with_indicators, symbols):
@@ -336,7 +336,7 @@ if __name__ == "__main__":
         df_with_indicators.to_pickle('sp500_combined_prices_with_indicators.pkl')
         print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators.pkl'")
         
-        #buy_model = create_buy_model(df_with_indicators, symbols)
+        buy_model = create_buy_model(df_with_indicators, symbols)
         sell_model = create_sell_model(df_with_indicators, symbols)
         
         
