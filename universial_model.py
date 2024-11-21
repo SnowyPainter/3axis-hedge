@@ -23,7 +23,9 @@ def oversample_data(X, y):
     n_samples, timesteps, n_features = X.shape
     X_reshaped = X.reshape(n_samples, timesteps * n_features)  # Flatten the data for SMOTE
 
-    smote = SMOTE()
+    # Set k_neighbors to a smaller value based on sample size
+    k_neighbors = min(2, n_samples - 1)  # Ensure k_neighbors is less than n_samples
+    smote = SMOTE(k_neighbors=k_neighbors)
     X_resampled, y_resampled = smote.fit_resample(X_reshaped, y)
     
     # Reshape back to original dimensions
@@ -190,16 +192,16 @@ def train_model(model, X_train, y_train, model_name):
 def sell_target_function(data, symbol):
     data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].pct_change()
     data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].pct_change()
-    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.001) &
-                    (data[f'{symbol}_ATR_Change'] > 0.01)).astype(int)
+    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.0015) &
+                    (data[f'{symbol}_ATR_Change'] > 0.005)).astype(int)
     data.dropna(inplace=True)
     return data
 
 def buy_target_function(data, symbol):
     data['MACD_Change'] = data[f'{symbol}_MACD'].diff()
     data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
-    data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.005) & 
-                      (data['Bollinger_Lower_Change'] < -0.005)).astype(int)
+    data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.02) & 
+                      (data['Bollinger_Lower_Change'] < -0.003)).astype(int)
     return data
 
 buy_features = ['MACD', 'Bollinger_lband', 'Volume_Change']
@@ -336,7 +338,7 @@ if __name__ == "__main__":
         df_with_indicators.to_pickle('sp500_combined_prices_with_indicators.pkl')
         print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators.pkl'")
         
-        buy_model = create_buy_model(df_with_indicators, symbols)
+        #buy_model = create_buy_model(df_with_indicators, symbols)
         sell_model = create_sell_model(df_with_indicators, symbols)
         
         
