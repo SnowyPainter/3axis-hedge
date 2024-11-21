@@ -24,7 +24,7 @@ def oversample_data(X, y):
     X_reshaped = X.reshape(n_samples, timesteps * n_features)  # Flatten the data for SMOTE
 
     # Set k_neighbors to a smaller value based on sample size
-    k_neighbors = min(2, n_samples - 1)  # Ensure k_neighbors is less than n_samples
+    k_neighbors = min(5, n_samples - 1)  # Ensure k_neighbors is less than n_samples
     smote = SMOTE(k_neighbors=k_neighbors)
     X_resampled, y_resampled = smote.fit_resample(X_reshaped, y)
     
@@ -174,7 +174,7 @@ def create_model(input_shape, loss='binary_crossentropy'):
 def train_model(model, X_train, y_train, model_name):
     X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
 
-    checkpoint = ModelCheckpoint(f'LOCALBNS_{model_name}_univ.keras', monitor='val_loss', save_best_only=True, mode='min')
+    checkpoint = ModelCheckpoint(f'LOCALBNS_{model_name}_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
     
@@ -192,7 +192,7 @@ def train_model(model, X_train, y_train, model_name):
 def sell_target_function(data, symbol):
     data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].pct_change()
     data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].pct_change()
-    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.0015) &
+    data[f'{symbol}_Signal'] = ((data[f'{symbol}_EMA_Change'].abs() < 0.015) &
                     (data[f'{symbol}_ATR_Change'] > 0.005)).astype(int)
     data.dropna(inplace=True)
     return data
@@ -201,7 +201,7 @@ def buy_target_function(data, symbol):
     data['MACD_Change'] = data[f'{symbol}_MACD'].diff()
     data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
     data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.02) & 
-                      (data['Bollinger_Lower_Change'] < -0.003)).astype(int)
+                    (data['Bollinger_Lower_Change'] < -0.003)).astype(int)
     return data
 
 buy_features = ['MACD', 'Bollinger_lband', 'Volume_Change']
@@ -259,7 +259,7 @@ def create_sell_model(df_with_indicators, symbols):
     return model
 
 def finetune_model(model, X, y, model_name, epochs=30, batch_size=64):
-    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.keras', monitor='loss', save_best_only=True, mode='min')
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, min_lr=0.00001)
     X_train_resampled, y_train_resampled = oversample_data(X, y)
@@ -275,7 +275,7 @@ def finetune_model(model, X, y, model_name, epochs=30, batch_size=64):
     )
     return model, history
 
-def finetune_buy_model(symbol, df_with_indicators, original_model_path='LOCALBNS_buy_univ.keras'):
+def finetune_buy_model(symbol, df_with_indicators, original_model_path='LOCALBNS_buy_univ.h5'):
     seq_length = localbns.seqlen
     features = buy_features
     symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
@@ -294,7 +294,7 @@ def finetune_buy_model(symbol, df_with_indicators, original_model_path='LOCALBNS
     
     return finetuned_model
 
-def finetune_sell_model(symbol, df_with_indicators, original_model_path='LOCALBNS_sell_univ.keras'):
+def finetune_sell_model(symbol, df_with_indicators, original_model_path='LOCALBNS_sell_univ.h5'):
     seq_length = localbns.seqlen
     features = sell_features
     symbol_data = df_with_indicators[[f'{symbol}_Price'] + [f'{symbol}_{feature}' for feature in features]].copy()
