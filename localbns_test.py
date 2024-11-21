@@ -55,7 +55,7 @@ class tester:
             return {
                 "price" : raw[price_columns].iloc[bar]
             }
-        raw, edited = utils.load_historical_datas(self.symbols, utils.today_before(1000), utils.today_before(50), interval='1d')
+        raw, edited = utils.load_historical_datas(self.symbols, utils.today_before(365), utils.today_before(0), interval='1d')
         self.bt = backtester.Backtester(self.symbols, raw, 10000000000, 0.005, _process_data)
         bar = 0
         buys = {}
@@ -74,7 +74,7 @@ class tester:
                 sim = self.similarity_ratio(buy, sell)
                 signal, p = self.calculate_ratio(buy, sell)
                 
-                if sim <= 0.9:
+                if sim <= 0.6:
                     if signal == -1:
                         self.bt.sell(self.symbols[0], 0.01)
                     elif signal == 1:
@@ -85,6 +85,6 @@ class tester:
         print(self.bt.get_result())
         self.bt.plot_result(localbns.normalize(raw))
 
-t = tester("NVDA")
+t = tester("TSLA")
 t.backtest()
         

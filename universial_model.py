@@ -258,7 +258,7 @@ def create_sell_model(df_with_indicators, symbols):
 
     return model
 
-def finetune_model(model, X, y, model_name, epochs=100, batch_size=64):
+def finetune_model(model, X, y, model_name, epochs=30, batch_size=64):
     checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.keras', monitor='loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
     reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, min_lr=0.00001)
