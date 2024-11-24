@@ -16,3 +16,7 @@ def buy_target_function(data, symbol):
                     (data['Bollinger_Lower_Change'] < -0.003)).astype(int)
     return data
 ```
+
+# Harpoon
+
+고래잡이 작살로, 고래의 위치를 추적하여 고래 등에 업어 타 빨판상어 처럼 갉아먹자.

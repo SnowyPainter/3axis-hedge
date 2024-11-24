@@ -69,7 +69,7 @@ def save_data_chunk(X, y, prefix, chunk_dir='./chunks'):
 
 def process_symbol_data(symbol, df_with_indicators, seq_length, features, target_function):
     print(f"Processing {symbol}...")
-    data = df_with_indicators[[f'{symbol}_Open'] + [f'{symbol}_{feature}' for feature in features]].copy()
+    data = df_with_indicators[[f'{symbol}_Open'] + [f'{symbol}_{feature}' for feature in gap_features]].copy()
     data = target_function(data, symbol)
     
     
@@ -144,7 +144,7 @@ def create_model(input_shape, loss='mse'):
 # GAP 타겟 함수
 def GAP_target_function(data, symbol, lookahead_days=1):
     data[f'{symbol}_Signal'] = data[f'{symbol}_Gap_Size'].apply(
-        lambda x: 1 if x >= 0.05 else (0 if x <= -0.05 else 2)
+        lambda x: 1 if x >= 0.025 else (0 if x <= -0.025 else 2)
     )
     return data
 
@@ -152,27 +152,7 @@ import numpy as np
 from sklearn.utils import class_weight
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from keras.callbacks import ModelCheckpoint, EarlyStopping
-import smote_variants as sv
-
 import tensorflow as tf
-
-def focal_loss(gamma=2., alpha=0.25):
-    def focal_loss_fixed(y_true, y_pred):
-        # Convert y_true and y_pred to float32
-        y_true = tf.convert_to_tensor(y_true, dtype=tf.float32)
-        y_pred = tf.convert_to_tensor(y_pred, dtype=tf.float32)
-
-        # Calculate the focal loss
-        alpha_t = y_true * alpha + (1 - y_true) * (1 - alpha)  # Adjust alpha for each class
-        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)  # Probability for true class
-
-        # Focal loss formula
-        fl = -alpha_t * tf.pow((1 - p_t), gamma) * tf.math.log(p_t + 1e-8)
-        
-        return tf.reduce_mean(tf.reduce_sum(fl, axis=1))  # Mean loss across all samples
-    
-    return focal_loss_fixed
-
 from imblearn.over_sampling import SMOTE
 
 def oversample_data(X, y):
@@ -228,12 +208,7 @@ from tensorflow import keras
 
 # 모델 로드 함수
 def load_model_with_error_handling(model_path):
-    
     return keras.models.load_model(model_path)
-    
-    with keras.utils.custom_object_scope({'focal_loss_fixed': focal_loss()}):
-        loaded_model = keras.models.load_model(model_path)
-        return loaded_model
 
 # 평가 함수
 def evaluate_model(model, X_test, y_test):
@@ -254,9 +229,9 @@ def evaluate_model(model, X_test, y_test):
         print(f"Error during evaluation: {e}")
 
 # 학습 데이터 준비 함수 (기존 틀 유지)
-seq_length = 60
+seq_length = 90
 def create_GAP_model(df_with_indicators, symbols):
-    features = gap_features
+    features = gap_features_normalized
     
     if not glob.glob('./chunks/gap_data_chunk_*.pkl'):
         create_and_save_data(symbols, df_with_indicators, seq_length, features, GAP_target_function, 'gap_')
@@ -287,7 +262,7 @@ def calculate_technical_indicators(df, symbol):
     df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_lband()
     df[f'{symbol}_Bollinger_band_diff'] = df[f'{symbol}_Bollinger_hband'] - df[f'{symbol}_Bollinger_lband']
     df[f'{symbol}_Volume_Change'] = df[symbol+'_Volume'].pct_change().fillna(0)
-    df[f'{symbol}_Gap_Size'] = (df[symbol+'_Close'] - df[symbol+'_Open']) / df[symbol+'_Open']
+    df[f'{symbol}_Gap_Size'] = (df[symbol+'_Open'] - df[f'{symbol}_Close'].shift(1)) / df[f'{symbol}_Close'].shift(1)
     df.dropna(inplace=True)
     df.fillna(0, inplace=True)
     df.replace([np.inf, -np.inf], 0, inplace=True)
