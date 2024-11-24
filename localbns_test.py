@@ -87,4 +87,3 @@ class tester:
 
 t = tester("TSLA")
 t.backtest()
-        

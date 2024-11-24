@@ -11,6 +11,12 @@ def today(tz = 'Asia/Seoul'):
 def today_before(day, tz = 'Asia/Seoul'):
     return datetime.now(pytz.timezone(tz)) - timedelta(days=day)
 
+def get_OHLCV(symbol, start, end, interval='1d'):
+    d = yf.download(symbol, start=start, end=end, interval=interval)
+    d.index = pd.to_datetime(d.index, format="%Y-%m-%d %H:%M:%S%z")
+    return d
+
+
 def load_historical_data(symbol, start, end, interval='1d'):
     d = yf.download(symbol, start=start, end=end, interval=interval)
     d.rename(columns={'Close': symbol+'_Price', 'Volume' : symbol+"_Volume", 'High' : symbol+"_High", 'Low' : symbol+"_Low"}, inplace=True)
