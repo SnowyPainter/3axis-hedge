@@ -5,6 +5,68 @@ from datetime import datetime, timedelta
 from collections import namedtuple
 import pytz
 import os, re
+import pickle
+import glob
+
+def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combined_close_prices.pkl'):
+    csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
+    combined_df = pd.DataFrame()
+    # List of top 25 S&P 500 companies by market cap
+    top_companies = [
+        'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'BRK-B', 'AVGO', 'GOOG', 'LLY',
+        'TSLA', 'JPM', 'UNH', 'XOM', 'V', 'MA', 'PG', 'COST', 'JNJ', 'HD',
+        'WMT', 'ABBV', 'NFLX', 'MRK', 'KO'
+    ]
+
+    # Filter CSV files to include only the top companies
+    csv_files = [f for f in csv_files if any(company in f for company in top_companies)]
+    print(f"Number of top companies found: {len(csv_files)}")
+    for file in csv_files:
+        df = pd.read_csv(file)
+        stock_name = os.path.basename(file).split('.')[0]
+        df = df[['Date', 'Open', 'Close', 'High', 'Low', 'Volume']]
+        df['Open'] = df['Open'].astype(float)
+        df['Close'] = df['Close'].astype(float)
+        df['High'] = df['High'].astype(float)
+        df['Low'] = df['Low'].astype(float)
+        df['Volume'] = df['Volume'].astype(float)
+        df['Date'] = pd.to_datetime(df['Date'], format='%d-%m-%Y')  # Convert date format
+        df = df.rename(columns={'Open': f"{stock_name}_Open", 'Close': f"{stock_name}_Close", 'Volume': f"{stock_name}_Volume", 'High' : f"{stock_name}_High", 'Low' : f"{stock_name}_Low"})
+        df.set_index('Date', inplace=True)
+        if combined_df.empty:
+            combined_df = df
+        else:
+            combined_df = combined_df.join(df, how='outer')
+    combined_df.sort_index(inplace=True)
+    # Filter data from 2005 onwards
+    combined_df = combined_df.loc['2010-01-01':]
+    original_columns = len(combined_df.columns)
+    # Remove columns with 30 or more consecutive NaN values
+    combined_df = combined_df.dropna(axis=1, thresh=len(combined_df) - 29)
+    # Remove columns where all values are NaN
+    combined_df = combined_df.dropna(axis=1, how='all')
+    removed_columns = original_columns - len(combined_df.columns)
+    print(f"Filtered data from 2010 onwards.")
+    print(f"Removed {removed_columns} columns where all values were NaN.")
+    print(f"Remaining columns: {len(combined_df.columns)}")
+    combined_df.dropna(inplace=True)
+    combined_df.to_pickle(pickle)
+
+def load_combined_prices(pickle):
+    try:
+        df = pd.read_pickle(pickle)
+        print(f"Successfully loaded combined close prices from {pickle}")
+        print(f"\nShape of the DataFrame: {df.shape}")
+        return df
+    except FileNotFoundError:
+        print(f"Error: '{pickle}' not found. Please run create_pickle() first.")
+        return None
+
+def save_data_chunk(X, y, prefix, chunk_dir='./chunks'):
+    os.makedirs(chunk_dir, exist_ok=True)
+    chunk_id = len(glob.glob(os.path.join(chunk_dir, f'{prefix}data_chunk_*.pkl')))
+    with open(os.path.join(chunk_dir, f'{prefix}data_chunk_{chunk_id}.pkl'), 'wb') as f:
+        pickle.dump((np.array(X), np.array(y)), f)
 
 def today(tz = 'Asia/Seoul'):
         return datetime.now(pytz.timezone(tz))

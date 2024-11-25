@@ -1,55 +1,107 @@
 import utils
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from ta import add_all_ta_features
+from ta.trend import adx, cci
+from ta.volume import on_balance_volume
+from ta.momentum import rsi
 
-def plot_technical_analysis(ohlcv, title_suffix):
-    # 기술적 지표 계산
-    ohlcv['MA20'] = ohlcv['Close'].rolling(window=20).mean()  # 20일 이동평균선
-    ohlcv['MA50'] = ohlcv['Close'].rolling(window=50).mean()  # 50일 이동평균선
-    ohlcv['RSI'] = 100 - (100 / (1 + (ohlcv['Close'].diff().clip(lower=0).rolling(window=14).mean() /
-                                      ohlcv['Close'].diff().clip(upper=0).abs().rolling(window=14).mean())))
-    ohlcv['Volume_Change'] = ohlcv['Volume'].pct_change()  # 거래량 변화율
-    ohlcv['ATR'] = ohlcv['High'] - ohlcv['Low']  # True Range
-    ohlcv['ATR'] = ohlcv['ATR'].rolling(window=14).mean()  # ATR 계산
-    ohlcv['MACD'] = ohlcv['Close'].ewm(span=12).mean() - ohlcv['Close'].ewm(span=26).mean()  # MACD
-    ohlcv['Signal_Line'] = ohlcv['MACD'].ewm(span=9).mean()  # MACD Signal Line
+def plot_technical_analysis(ohlcv, symbol, title_suffix):
+    print(symbol)
+    
+    # 필요한 컬럼 추출 및 이름 설정
+    ohlcv = ohlcv.rename(columns={
+        f'{symbol}_Close': 'Close', 
+        f'{symbol}_High': 'High',
+        f'{symbol}_Low': 'Low', 
+        f'{symbol}_Volume': 'Volume'
+    })
+
+    # 추가 기술적 지표 계산
+    ohlcv['MA20'] = ohlcv['Close'].rolling(window=20).mean()
+    ohlcv['MA50'] = ohlcv['Close'].rolling(window=50).mean()
+    ohlcv['RSI'] = rsi(ohlcv['Close'], window=14)
+    ohlcv['VWAP'] = (ohlcv['Close'] * ohlcv['Volume']).cumsum() / ohlcv['Volume'].cumsum()
+    ohlcv['CMF'] = ((ohlcv['Close'] - ohlcv['Low']) - (ohlcv['High'] - ohlcv['Close'])) / \
+                   (ohlcv['High'] - ohlcv['Low']) * ohlcv['Volume']
+    ohlcv['CMF'] = ohlcv['CMF'].rolling(window=20).mean()
+    ohlcv['CCI'] = cci(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=20)
+    ohlcv['ADX'] = adx(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=14)
+    ohlcv['OBV'] = on_balance_volume(ohlcv['Close'], ohlcv['Volume'])
 
     # 결측값 제거
     ohlcv = ohlcv.dropna()
 
-    # 기술적 특성만 선택
-    features = ['Close', 'Volume', 'MA20', 'MA50', 'RSI', 'Volume_Change', 'ATR', 'MACD']
+    # 선택된 특성 리스트
+    features = ['Close', 'MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
     feature_data = ohlcv[features]
 
-    # 특성 간 산점도 행렬
+    # 1. 산점도 행렬
     plt.figure(figsize=(12, 10))
     sns.pairplot(feature_data, diag_kind="kde", corner=True)
     plt.suptitle(f"Scatterplot Matrix - {title_suffix}", fontsize=16)
-    plt.show()
+    plt.savefig(f"harpoon-images/{symbol}_Scatterplot_Matrix_{title_suffix}.png")
+    plt.close()
 
-def analyze_high_volatility_and_plot(ohlcv, threshold=0.1):
+    # 2. 상관계수 히트맵
+    corr = feature_data.corr()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f')
+    plt.title(f"Correlation Heatmap - {title_suffix}", fontsize=16)
+    plt.savefig(f"harpoon-images/{symbol}_Correlation_Heatmap_{title_suffix}.png")
+    plt.close()
+
+    # 3. Box Plot (특정 지표 확인)
+    plt.figure(figsize=(12, 6))
+    sns.boxplot(data=feature_data[['RSI', 'CCI', 'ADX']], palette='pastel')
+    plt.title(f"Boxplot of Key Indicators - {title_suffix}", fontsize=16)
+    plt.savefig(f"harpoon-images/{symbol}_Boxplot_Key_Indicators_{title_suffix}.png")
+    plt.close()
+
+    # 4. Time Series Plot
+    plt.figure(figsize=(14, 7))
+    plt.plot(ohlcv['Close'], label='Close Price', color='blue', alpha=0.8)
+    plt.plot(ohlcv['VWAP'], label='VWAP', color='orange', linestyle='--', alpha=0.7)
+    plt.plot(ohlcv['MA20'], label='MA20', color='green', linestyle='-.', alpha=0.7)
+    plt.legend(loc='upper left')
+    plt.title(f"Time Series Analysis - {title_suffix}", fontsize=16)
+    plt.savefig(f"harpoon-images/{symbol}_Time_Series_Analysis_{title_suffix}.png")
+    plt.close()
+
+
+def analyze_high_volatility_and_plot(ohlcv, symbol, threshold=0.1):
     # 변동폭 계산
-    ohlcv['Price_Change'] = (ohlcv['High'] - ohlcv['Low']) / ohlcv['Close'].shift(1)
+    ohlcv['Price_Change'] = (ohlcv[symbol+'_High'] - ohlcv[symbol+'_Low']) / ohlcv[symbol+'_Close'].shift(1)
     volatile_data = ohlcv[ohlcv['Price_Change'] > threshold]
-
     if not volatile_data.empty:
         for idx in volatile_data.index:
-            # 이전 5개 데이터와 이후 5개 데이터 추출
-            start = max(0, ohlcv.index.get_loc(idx) - (24*7))
-            end = min(len(ohlcv), ohlcv.index.get_loc(idx) + 1)
+            start = max(0, ohlcv.index.get_loc(idx) - (90))
+            end = min(len(ohlcv), ohlcv.index.get_loc(idx))
             surrounding_data = ohlcv.iloc[start:end]
-            print(surrounding_data[['Close', 'High', 'Low', 'Volume', 'Price_Change']])
+            plot_technical_analysis(surrounding_data, symbol, title_suffix=f"High Volatility at {idx}")
 
-            # 주변 데이터로 기술적 분석 시각화
-            plot_technical_analysis(surrounding_data, title_suffix=f"High Volatility at {idx}")
+if __name__ == "__main__":
+    utils.create_pickle()
+    combined_prices = utils.load_combined_prices('sp500_combined_close_prices.pkl')
+    symbols = [col for col in combined_prices.columns if '_' not in col]
+    if combined_prices is not None:
+        df_with_indicators = combined_prices.copy()
+        new_indicators = {}
+        symbols = set()
+        for col in combined_prices.columns:
+            symbols.add(col.split('_')[0])
+        for stock in symbols:
+            temp_df = pd.DataFrame({
+                f'{stock}_Open': df_with_indicators[f"{stock}_Open"],
+                f'{stock}_High': df_with_indicators[f"{stock}_High"],
+                f'{stock}_Low': df_with_indicators[f"{stock}_Low"],
+                f'{stock}_Close': df_with_indicators[f"{stock}_Close"],
+                f'{stock}_Volume' : df_with_indicators[f"{stock}_Volume"]
+            })
+            #temp_df = calculate_technical_indicators(temp_df, stock)
+            #for indicator in localbns.features:
+            #    new_indicators[f'{stock}_{indicator}'] = temp_df[f'{stock}_{indicator}']
 
-# Main 실행
-gy = "006050.KQ"
-intervals = ['1h']  # '1d' 데이터는 제거
-
-for interval in intervals:
-    whale = utils.get_OHLCV(gy, "2023-01-01", "2024-11-24", interval=interval)
-
-    # 10% 이상의 변동폭에 대해 분석 및 플롯
-    analyze_high_volatility_and_plot(whale, threshold=0.1)
+            analyze_high_volatility_and_plot(temp_df, stock, 0.3)
