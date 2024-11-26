@@ -7,6 +7,11 @@ import pytz
 import os, re
 import pickle
 import glob
+from ta import add_all_ta_features
+from ta.trend import adx, cci
+from ta.volume import on_balance_volume
+from ta.momentum import rsi
+from sklearn.preprocessing import MinMaxScaler
 
 def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combined_close_prices.pkl'):
     csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
@@ -78,6 +83,27 @@ def get_OHLCV(symbol, start, end, interval='1d'):
     d.index = pd.to_datetime(d.index, format="%Y-%m-%d %H:%M:%S%z")
     return d
 
+def tech(ohlcv):
+    ohlcv = ohlcv.copy()
+    ohlcv['MA20'] = ohlcv['Close'].rolling(window=20).mean()
+    ohlcv['MA50'] = ohlcv['Close'].rolling(window=50).mean()
+    ohlcv['RSI'] = rsi(ohlcv['Close'], window=14)
+    ohlcv['VWAP'] = (ohlcv['Close'] * ohlcv['Volume']).cumsum() / ohlcv['Volume'].cumsum()
+    ohlcv['CMF'] = ((ohlcv['Close'] - ohlcv['Low']) - (ohlcv['High'] - ohlcv['Close'])) / \
+                   (ohlcv['High'] - ohlcv['Low']) * ohlcv['Volume']
+    ohlcv['CMF'] = ohlcv['CMF'].rolling(window=20).mean()
+    ohlcv['CCI'] = cci(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=20)
+    ohlcv['ADX'] = adx(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=14)
+    ohlcv['OBV'] = on_balance_volume(ohlcv['Close'], ohlcv['Volume'])
+
+    ohlcv.dropna(inplace=True)
+
+    # Min-Max 스케일링 적용
+    scaler = MinMaxScaler()
+    scaled_features = ['MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
+    ohlcv[scaled_features] = scaler.fit_transform(ohlcv[scaled_features])
+
+    return ohlcv
 
 def load_historical_data(symbol, start, end, interval='1d'):
     d = yf.download(symbol, start=start, end=end, interval=interval)
