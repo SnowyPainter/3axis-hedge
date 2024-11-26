@@ -94,8 +94,15 @@ def plot_technical_analysis(ohlcv, ohlcv2, point, symbol, title_suffix):
 
 def analyze_high_volatility_and_plot(ohlcv, symbol, threshold=0.1):
     # 변동폭 계산
-    ohlcv['Price_Change'] = (ohlcv[symbol+'_High'] - ohlcv[symbol+'_Open']) / ohlcv[symbol+'_Close'].shift(1)
-    volatile_data = ohlcv[ohlcv['Price_Change'] > threshold]
+    
+    s = "급등"
+    if threshold < 0:
+        s = "급락"
+        ohlcv['Price_Change'] = (ohlcv[symbol+'_Low'] - ohlcv[symbol+'_Open']) / ohlcv[symbol+'_Close'].shift(1)
+        volatile_data = ohlcv[ohlcv['Price_Change'] <= threshold]
+    else:
+        ohlcv['Price_Change'] = (ohlcv[symbol+'_High'] - ohlcv[symbol+'_Open']) / ohlcv[symbol+'_Close'].shift(1)
+        volatile_data = ohlcv[ohlcv['Price_Change'] >= threshold]
     if not volatile_data.empty:
         for idx in volatile_data.index:
             start = max(0, ohlcv.index.get_loc(idx) - (90))
@@ -104,7 +111,7 @@ def analyze_high_volatility_and_plot(ohlcv, symbol, threshold=0.1):
             surrounding_data = ohlcv.iloc[start:end]
 
             plot_technical_analysis(surrounding_data, ohlcv[start:end2], idx, symbol, 
-                title_suffix=f"{symbol} High Volatility at {idx}")
+                title_suffix=f"{s} {symbol} {idx}")
 
 if __name__ == "__main__":
     #utils.create_pickle()
@@ -128,4 +135,4 @@ if __name__ == "__main__":
             #for indicator in localbns.features:
             #    new_indicators[f'{stock}_{indicator}'] = temp_df[f'{stock}_{indicator}']
 
-            analyze_high_volatility_and_plot(temp_df, stock, threshold=0.2)
+            analyze_high_volatility_and_plot(temp_df, stock, threshold=-0.2)
