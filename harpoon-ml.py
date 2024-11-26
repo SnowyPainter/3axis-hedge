@@ -77,7 +77,7 @@ def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=5, threshold=0
     '''
     # V자형/역V자형 라벨링 (CMF + VWAP 조건)
     # 기울기 차이가 일정 비율 이상일 때 V자형/역V자형 패턴을 찾아냄
-    threshold_scaled = 0.01
+    threshold_scaled = 0.03
     data['V_Pattern'] = np.where(
         (data['CMF_Left_Slope'] < -threshold_scaled) & 
         (data['CMF_Right_Slope'] > threshold_scaled) &
@@ -97,8 +97,8 @@ def label_outcomes(data, window=30, threshold=0.2):
     """
     급등/급락 라벨링
     """
-    future_returns = (data['Close'].shift(-window) - data['Close']) / data['Close']
-    data['Outcome'] = np.where(future_returns > threshold, 1,  # 급등
+    future_returns = (data['High'].shift(-window) - data['Close']) / data['Close']
+    data['Outcome'] = np.where(future_returns > threshold, 1,
                                np.where(future_returns < -threshold, 0, np.nan))  # 급락
     return data.dropna(subset=['Outcome'])
 
@@ -121,7 +121,7 @@ def train_model(X, y):
 
     # 성능 평가
     y_pred = model.predict(X_test)
-    print(classification_report(y_test, y_pred))
+    #print(classification_report(y_test, y_pred))
 
     return model
 
@@ -137,7 +137,7 @@ def analyze_v_patterns(data, stock_name):
     
     # 역V자 패턴 발생 시 급락 비율
     inverse_v_success_rate = (inverse_v_pattern_df['Outcome'] == 0).mean()
-    
+    '''
     # 패턴별 Outcome 분포
     print(f"\n[{stock_name}] 분석 결과")
     print(f"V자 패턴 성공률 (급등): {v_success_rate:.2%}")
@@ -148,17 +148,17 @@ def analyze_v_patterns(data, stock_name):
     
     print("\n역V자형 패턴 Outcome 분포:")
     print(inverse_v_pattern_df['Outcome'].value_counts(normalize=True))
-    
+    '''
     return v_success_rate, inverse_v_success_rate
 
 
-def analyze_all_stocks(combined_prices):
+def analyze_all_stocks(combined_prices, threshold=0.2):
     """
     여러 주식에 대해 V자 패턴 분석 및 결과 종합
     """
     symbols = {col.split('_')[0] for col in combined_prices.columns}
     overall_results = []
-
+    print(f"{threshold * 100 :.2f}% 등락 분석")
     for stock in symbols:
         print(f"분석 중: {stock}")
         temp_df = pd.DataFrame({
@@ -179,8 +179,8 @@ def analyze_all_stocks(combined_prices):
         # 기술 지표 추가 및 라벨링
         df = utils.tech(ohlcv)
         df = label_v_patterns(df)
-        df = label_outcomes(df, window=30, threshold=0.2)
-
+        df = label_outcomes(df, window=30, threshold=threshold)
+        df.to_csv(f"harpoon-images/{stock}.csv")
         # 모델 학습
         features = ['MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
         X, y = prepare_dataset(df, feature_cols=features, label_col="Outcome")
@@ -188,12 +188,13 @@ def analyze_all_stocks(combined_prices):
             continue
         
         model = train_model(X, y)
-
+        
+        '''
         # 중요도 출력
         print(f"\n[Feature Importances for {stock}]")
         for feature, importance in zip(features, model.feature_importances_):
             print(f"{feature}: {importance:.4f}")
-
+        '''
         # V자 패턴 분석 및 결과 저장
         v_success_rate, inverse_v_success_rate = analyze_v_patterns(df, stock)
         overall_results.append({
@@ -203,9 +204,22 @@ def analyze_all_stocks(combined_prices):
         })
 
     # 전체 결과 요약
-    print("\n===== 전체 주식 분석 결과 =====")
+    # 개별 주식 결과 출력
+    '''
+    print("\n===== 개별 주식 분석 결과 =====")
     for result in overall_results:
-        print(f"{result['stock']}: V자 성공률 {result['v_success_rate']:.2%}, 역V자 성공률 {result['inverse_v_success_rate']:.2%}")
+        print(f"{result['stock']}:")
+        print(f"  - V자 패턴 성공률: {result['v_success_rate']:.2%}")
+        print(f"  - 역V자 패턴 성공률: {result['inverse_v_success_rate']:.2%}")
+        print()
+    '''
+    # 전체 평균 계산 및 출력
+    avg_v = sum(r['v_success_rate'] for r in overall_results) / len(overall_results)
+    avg_inv_v = sum(r['inverse_v_success_rate'] for r in overall_results) / len(overall_results)
+    
+    print(f"\n===== {threshold * 100 :.2f}% 등락 전체 평균 분석 결과 =====")
+    print(f"전체 주식 V자 패턴 평균 성공률: {avg_v:.2%}")
+    print(f"전체 주식 역V자 패턴 평균 성공률: {avg_inv_v:.2%}")
 
     return overall_results
 
@@ -213,4 +227,6 @@ def analyze_all_stocks(combined_prices):
 if __name__ == "__main__":
     combined_prices = utils.load_combined_prices('sp500_combined_close_prices.pkl')
     if combined_prices is not None:
-        analyze_all_stocks(combined_prices)
+        thresholds = [0.1]
+        for threshold in thresholds:
+            analyze_all_stocks(combined_prices, threshold)
