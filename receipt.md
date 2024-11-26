@@ -16,9 +16,3 @@ def buy_target_function(data, symbol):
                     (data['Bollinger_Lower_Change'] < -0.003)).astype(int)
     return data
 ```
-
-# Harpoon
-
-## 고래가 움직이기 7일전부터
-
-![d](./gy-2024-04-09-1h.png)

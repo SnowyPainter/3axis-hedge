@@ -7,19 +7,10 @@ from ta import add_all_ta_features
 from ta.trend import adx, cci
 from ta.volume import on_balance_volume
 from ta.momentum import rsi
+from sklearn.preprocessing import MinMaxScaler
 
-def plot_technical_analysis(ohlcv, symbol, title_suffix):
-    print(symbol)
-    
-    # 필요한 컬럼 추출 및 이름 설정
-    ohlcv = ohlcv.rename(columns={
-        f'{symbol}_Close': 'Close', 
-        f'{symbol}_High': 'High',
-        f'{symbol}_Low': 'Low', 
-        f'{symbol}_Volume': 'Volume'
-    })
 
-    # 추가 기술적 지표 계산
+def tech(ohlcv):
     ohlcv['MA20'] = ohlcv['Close'].rolling(window=20).mean()
     ohlcv['MA50'] = ohlcv['Close'].rolling(window=50).mean()
     ohlcv['RSI'] = rsi(ohlcv['Close'], window=14)
@@ -30,6 +21,32 @@ def plot_technical_analysis(ohlcv, symbol, title_suffix):
     ohlcv['CCI'] = cci(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=20)
     ohlcv['ADX'] = adx(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=14)
     ohlcv['OBV'] = on_balance_volume(ohlcv['Close'], ohlcv['Volume'])
+    return ohlcv
+
+def plot_technical_analysis(ohlcv, ohlcv2, point, symbol, title_suffix):
+    # 필요한 컬럼 추출 및 이름 설정
+
+    ohlcv = ohlcv.rename(columns={
+        f'{symbol}_Open': 'Open',
+        f'{symbol}_Close': 'Close', 
+        f'{symbol}_High': 'High',
+        f'{symbol}_Low': 'Low', 
+        f'{symbol}_Volume': 'Volume'
+    })
+
+    ohlcv2 = ohlcv2.rename(columns={
+        f'{symbol}_Open': 'Open',
+        f'{symbol}_Close': 'Close', 
+        f'{symbol}_High': 'High',
+        f'{symbol}_Low': 'Low', 
+        f'{symbol}_Volume': 'Volume'
+    })
+
+    # 추가 기술적 지표 계산
+    ohlcv = tech(ohlcv)
+    ohlcv2 = tech(ohlcv2)
+    scaler = MinMaxScaler()
+    ohlcv2[['Close', 'MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']] = scaler.fit_transform(ohlcv2[['Close', 'MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']])
 
     # 결측값 제거
     ohlcv = ohlcv.dropna()
@@ -38,52 +55,59 @@ def plot_technical_analysis(ohlcv, symbol, title_suffix):
     features = ['Close', 'MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
     feature_data = ohlcv[features]
 
+    import os
+    import mplfinance as mpf
+    # title_suffix에 따른 폴더 생성
+    folder_name = f"harpoon-images/{title_suffix}"
+    os.makedirs(folder_name, exist_ok=True)
+
     # 1. 산점도 행렬
     plt.figure(figsize=(12, 10))
     sns.pairplot(feature_data, diag_kind="kde", corner=True)
-    plt.suptitle(f"Scatterplot Matrix - {title_suffix}", fontsize=16)
-    plt.savefig(f"harpoon-images/{symbol}_Scatterplot_Matrix_{title_suffix}.png")
+    plt.suptitle(f"산점도 행렬 - {title_suffix}", fontsize=16)
+    plt.savefig(f"{folder_name}/{symbol}_산점도_행렬.png")
     plt.close()
 
     # 2. 상관계수 히트맵
     corr = feature_data.corr()
     plt.figure(figsize=(10, 8))
     sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f')
-    plt.title(f"Correlation Heatmap - {title_suffix}", fontsize=16)
-    plt.savefig(f"harpoon-images/{symbol}_Correlation_Heatmap_{title_suffix}.png")
+    plt.title(f"상관계수 히트맵 - {title_suffix}", fontsize=16)
+    plt.savefig(f"{folder_name}/{symbol}_상관계수_히트맵.png")
     plt.close()
 
-    # 3. Box Plot (특정 지표 확인)
-    plt.figure(figsize=(12, 6))
-    sns.boxplot(data=feature_data[['RSI', 'CCI', 'ADX']], palette='pastel')
-    plt.title(f"Boxplot of Key Indicators - {title_suffix}", fontsize=16)
-    plt.savefig(f"harpoon-images/{symbol}_Boxplot_Key_Indicators_{title_suffix}.png")
-    plt.close()
-
-    # 4. Time Series Plot
-    plt.figure(figsize=(14, 7))
-    plt.plot(ohlcv['Close'], label='Close Price', color='blue', alpha=0.8)
-    plt.plot(ohlcv['VWAP'], label='VWAP', color='orange', linestyle='--', alpha=0.7)
-    plt.plot(ohlcv['MA20'], label='MA20', color='green', linestyle='-.', alpha=0.7)
-    plt.legend(loc='upper left')
-    plt.title(f"Time Series Analysis - {title_suffix}", fontsize=16)
-    plt.savefig(f"harpoon-images/{symbol}_Time_Series_Analysis_{title_suffix}.png")
+    # 4. 일반 차트와 기술적 지표
+    plt.figure(figsize=(14, 10))
+    
+    # 주가 데이터 플롯
+    plt.plot(ohlcv2.index, ohlcv2['Close'], label='종가', color='black')
+    plt.scatter(point, ohlcv2.loc[point, 'Close'], color='red', s=100, zorder=5, label='포착 시점')
+    plt.plot(ohlcv2.index, ohlcv2['CCI'], label='CCI', color='blue', alpha=0.7)
+    plt.plot(ohlcv2.index, ohlcv2['MA50'], label='MA50', color='red', alpha=0.7)
+    plt.plot(ohlcv2.index, ohlcv2['VWAP'], label='VWAP', color='green', alpha=0.7)
+    plt.title(f"주가 차트 - {title_suffix}")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{folder_name}/{symbol}_주가_차트.png")
     plt.close()
 
 
 def analyze_high_volatility_and_plot(ohlcv, symbol, threshold=0.1):
     # 변동폭 계산
-    ohlcv['Price_Change'] = (ohlcv[symbol+'_High'] - ohlcv[symbol+'_Low']) / ohlcv[symbol+'_Close'].shift(1)
+    ohlcv['Price_Change'] = (ohlcv[symbol+'_High'] - ohlcv[symbol+'_Open']) / ohlcv[symbol+'_Close'].shift(1)
     volatile_data = ohlcv[ohlcv['Price_Change'] > threshold]
     if not volatile_data.empty:
         for idx in volatile_data.index:
             start = max(0, ohlcv.index.get_loc(idx) - (90))
             end = min(len(ohlcv), ohlcv.index.get_loc(idx))
+            end2 = min(len(ohlcv), ohlcv.index.get_loc(idx) + 10)
             surrounding_data = ohlcv.iloc[start:end]
-            plot_technical_analysis(surrounding_data, symbol, title_suffix=f"High Volatility at {idx}")
+
+            plot_technical_analysis(surrounding_data, ohlcv[start:end2], idx, symbol, 
+                title_suffix=f"{symbol} High Volatility at {idx}")
 
 if __name__ == "__main__":
-    utils.create_pickle()
+    #utils.create_pickle()
     combined_prices = utils.load_combined_prices('sp500_combined_close_prices.pkl')
     symbols = [col for col in combined_prices.columns if '_' not in col]
     if combined_prices is not None:
@@ -104,4 +128,4 @@ if __name__ == "__main__":
             #for indicator in localbns.features:
             #    new_indicators[f'{stock}_{indicator}'] = temp_df[f'{stock}_{indicator}']
 
-            analyze_high_volatility_and_plot(temp_df, stock, 0.3)
+            analyze_high_volatility_and_plot(temp_df, stock, threshold=0.2)
