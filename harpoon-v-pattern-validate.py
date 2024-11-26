@@ -39,6 +39,25 @@ def calculate_slope(data, feature, window=30):
     
     return slopes_left, slopes_right
 
+def detect_v_pattern(data, threshold_scaled=0.03):
+    """
+    CMF와 VWAP의 기울기를 기반으로 V자형/역V자형 패턴을 감지합니다.
+    """
+    v_pattern = np.where(
+        (data['CMF_Left_Slope'] < -threshold_scaled) & 
+        (data['CMF_Right_Slope'] > threshold_scaled) &
+        (data['VWAP_Left_Slope'] < -threshold_scaled) & 
+        (data['VWAP_Right_Slope'] > threshold_scaled), 1,  # V자형
+        np.where(
+            (data['CMF_Left_Slope'] > threshold_scaled) & 
+            (data['CMF_Right_Slope'] < -threshold_scaled) &
+            (data['VWAP_Left_Slope'] > threshold_scaled) & 
+            (data['VWAP_Right_Slope'] < -threshold_scaled), 0,  # 역V자형
+            np.nan
+        )
+    )
+    return v_pattern
+
 def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=5, threshold=0.001):
     """
     CMF와 VWAP에 대해 V자형/역V자형 패턴을 라벨링
@@ -64,33 +83,10 @@ def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=5, threshold=0
     data['VWAP_Left_Slope'] = scaled_slopes[:, 2]
     data['VWAP_Right_Slope'] = scaled_slopes[:, 3]
     data.dropna(inplace=True)
-    '''
-    sample_idx = range(50, 100)  # 데이터의 일부분
-
-    plt.plot(data['CMF_Left_Slope'][sample_idx], label='CMF Left Slope', color='blue')
-    plt.plot(data['CMF_Right_Slope'][sample_idx], label='CMF Right Slope', color='orange')
-    plt.plot(data['VWAP_Left_Slope'][sample_idx], label='VWAP Left Slope', color='green')
-    plt.plot(data['VWAP_Right_Slope'][sample_idx], label='VWAP Right Slope', color='red')
-    plt.legend()
-    plt.title("Slopes over sample index")
-    plt.show()
-    '''
-    # V자형/역V자형 라벨링 (CMF + VWAP 조건)
-    # 기울기 차이가 일정 비율 이상일 때 V자형/역V자형 패턴을 찾아냄
-    threshold_scaled = 0.03
-    data['V_Pattern'] = np.where(
-        (data['CMF_Left_Slope'] < -threshold_scaled) & 
-        (data['CMF_Right_Slope'] > threshold_scaled) &
-        (data['VWAP_Left_Slope'] < -threshold_scaled) & 
-        (data['VWAP_Right_Slope'] > threshold_scaled), 1,  # V자형
-        np.where(
-            (data['CMF_Left_Slope'] > threshold_scaled) & 
-            (data['CMF_Right_Slope'] < -threshold_scaled) &
-            (data['VWAP_Left_Slope'] > threshold_scaled) & 
-            (data['VWAP_Right_Slope'] < -threshold_scaled), 0,  # 역V자형
-            np.nan
-        )
-    )
+    
+    # V자형/역V자형 패턴 감지
+    data['V_Pattern'] = detect_v_pattern(data)
+    
     return data.dropna(subset=['V_Pattern'])
 
 def label_outcomes(data, window=30, threshold=0.2):
@@ -121,8 +117,13 @@ def train_model(X, y):
 
     # 성능 평가
     y_pred = model.predict(X_test)
-    #print(classification_report(y_test, y_pred))
-
+    results = pd.DataFrame({
+        '실제결과': y_test,
+        '예측결과': y_pred
+    })
+    accuracy = (results['실제결과'] == results['예측결과']).mean()
+    print(f"모델 예측 정확도: {accuracy:.2%}")
+    
     return model
 
 def analyze_v_patterns(data, stock_name):
@@ -227,6 +228,6 @@ def analyze_all_stocks(combined_prices, threshold=0.2):
 if __name__ == "__main__":
     combined_prices = utils.load_combined_prices('sp500_combined_close_prices.pkl')
     if combined_prices is not None:
-        thresholds = [0.1]
+        thresholds = [0.2]
         for threshold in thresholds:
             analyze_all_stocks(combined_prices, threshold)
