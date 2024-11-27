@@ -12,6 +12,8 @@ from ta.trend import adx, cci
 from ta.volume import on_balance_volume
 from ta.momentum import rsi
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.model_selection import train_test_split
 
 def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combined_close_prices.pkl'):
     csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
@@ -73,6 +75,29 @@ def save_data_chunk(X, y, prefix, chunk_dir='./chunks'):
     with open(os.path.join(chunk_dir, f'{prefix}data_chunk_{chunk_id}.pkl'), 'wb') as f:
         pickle.dump((np.array(X), np.array(y)), f)
 
+def load_and_split_data_onehot(prefix, chunk_dir='./chunks'):
+    X_all, y_all = [], []
+    for chunk_file in glob.glob(os.path.join(chunk_dir, f'{prefix}data_chunk_*.pkl')):
+        with open(chunk_file, 'rb') as f:
+            X_chunk, y_chunk = pickle.load(f)
+            X_all.append(X_chunk)
+            y_all.append(y_chunk)
+    
+    X_all = np.concatenate(X_all, axis=0)
+    y_all = np.concatenate(y_all, axis=0)
+
+    # Check for NaN or infinite values and replace/remove them
+    X_all = np.nan_to_num(X_all, nan=0.0, posinf=1e10, neginf=-1e10)
+
+    encoder = OneHotEncoder(sparse_output=False)
+    y_all = encoder.fit_transform(np.array(y_all).reshape(-1, 1))
+
+    print("Starting train-test split...")
+    X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=42)
+    print("Split completed")
+
+    return X_train, X_test, y_train, y_test
+
 def today(tz = 'Asia/Seoul'):
         return datetime.now(pytz.timezone(tz))
 def today_before(day, tz = 'Asia/Seoul'):
@@ -82,6 +107,42 @@ def get_OHLCV(symbol, start, end, interval='1d'):
     d = yf.download(symbol, start=start, end=end, interval=interval)
     d.index = pd.to_datetime(d.index, format="%Y-%m-%d %H:%M:%S%z")
     return d
+
+def process_symbol_data_012(symbol, df_with_indicators, seq_length, features, target_function):
+    print(f"Processing {symbol}...")
+    data = df_with_indicators[[f'{symbol}_Open'] + [f'{symbol}_{feature}' for feature in features]].copy()
+    data = target_function(data, symbol)
+    
+    data.dropna(inplace=True)
+    
+    symbol_X, symbol_y = [], []
+    for i in range(len(data) - seq_length):
+        symbol_X.append(data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
+        symbol_y.append(data[f'{symbol}_Signal'].iloc[i+seq_length])
+    
+    
+    print(f"{symbol} : Preprocessed")
+    
+    ones_count = sum(1 for i in symbol_y if i == 1)
+    zeros_count = sum(1 for i in symbol_y if i == 0)
+    twos_count = sum(1 for i in symbol_y if i == 2)
+    print(f"{symbol} : Number of 1's: {ones_count}, Number of 0's: {zeros_count}, Number of 2's: {twos_count}")
+    
+    return symbol_X, symbol_y
+
+def create_and_save_data_012(symbols, df_with_indicators, seq_length, features, target_function, prefix):
+    X, y = [], []
+    for symbol in symbols:
+        symbol_X, symbol_y = process_symbol_data_012(symbol, df_with_indicators, seq_length, features, target_function)
+        X.extend(symbol_X)
+        y.extend(symbol_y)
+        
+        if len(X) > 4000:  # Adjust this threshold as needed
+            save_data_chunk(X, y, prefix)
+            X, y = [], []
+    
+    if X:
+        save_data_chunk(X, y, prefix)
 
 def tech(ohlcv):
     ohlcv = ohlcv.copy()
