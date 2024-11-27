@@ -12,91 +12,65 @@ from ta.momentum import rsi
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
-
-def calculate_slope(data, feature, window=30):
+def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=90, slope_threshold=0.03):
     """
-    주어진 윈도우 크기를 기준으로 기울기를 계산합니다.
-    왼쪽 기울기(left)는 윈도우의 앞부분을, 오른쪽 기울기(right)는 윈도우의 뒷부분을 기준으로 계산합니다.
+    CMF(y축)와 VWAP(x축)의 산점도에서 V자/역V자 패턴을 더욱 정밀하게 라벨링
+    window 60일 단위로 패턴 탐지
     """
-    slopes_left = []
-    slopes_right = []
-    
-    for i in range(len(data) - window + 1):
-        segment_left = data[feature].iloc[i:i + window // 2]  # 왼쪽 절반
-        segment_right = data[feature].iloc[i + window // 2:i + window]  # 오른쪽 절반
-        
-        # 왼쪽 기울기
-        slope_left = (segment_left.iloc[-1] - segment_left.iloc[0]) / (len(segment_left) - 1)
-        slopes_left.append(slope_left)
-        
-        # 오른쪽 기울기
-        slope_right = (segment_right.iloc[-1] - segment_right.iloc[0]) / (len(segment_right) - 1)
-        slopes_right.append(slope_right)
-    
-    # 기울기 계산 결과를 NaN으로 채운 나머지 부분
-    slopes_left = [np.nan] * (window // 2) + slopes_left
-    slopes_right = [np.nan] * (window // 2) + slopes_right
-    
-    return slopes_left, slopes_right
-
-def detect_v_pattern(data, threshold_scaled=0.03):
-    """
-    CMF와 VWAP의 기울기를 기반으로 V자형/역V자형 패턴을 감지합니다.
-    """
-    v_pattern = np.where(
-        (data['CMF_Left_Slope'] < -threshold_scaled) & 
-        (data['CMF_Right_Slope'] > threshold_scaled) &
-        (data['VWAP_Left_Slope'] < -threshold_scaled) & 
-        (data['VWAP_Right_Slope'] > threshold_scaled), 1,  # V자형
-        np.where(
-            (data['CMF_Left_Slope'] > threshold_scaled) & 
-            (data['CMF_Right_Slope'] < -threshold_scaled) &
-            (data['VWAP_Left_Slope'] > threshold_scaled) & 
-            (data['VWAP_Right_Slope'] < -threshold_scaled), 0,  # 역V자형
-            np.nan
-        )
-    )
-    return v_pattern
-
-def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=5, threshold=0.001):
-    """
-    CMF와 VWAP에 대해 V자형/역V자형 패턴을 라벨링
-    """
-    # 기울기 계산
-    slopes_cmf_l, slopes_cmf_r = calculate_slope(data, feature=cmf_col, window=window)
-    slopes_vwap_l, slopes_vwap_r = calculate_slope(data, feature=vwap_col, window=window)
     data = data.copy()
-    # 기울기 데이터 추가
-    data = data.tail(len(slopes_vwap_r))
-    data['CMF_Left_Slope'] = slopes_cmf_l
-    data['CMF_Right_Slope'] = slopes_cmf_r
-    data['VWAP_Left_Slope'] = slopes_vwap_l
-    data['VWAP_Right_Slope'] = slopes_vwap_r
-    slopes = data[['CMF_Left_Slope', 'CMF_Right_Slope', 'VWAP_Left_Slope', 'VWAP_Right_Slope']]
-    # 스케일링 적용
-    scaler = StandardScaler()
-    scaled_slopes = scaler.fit_transform(slopes)
-
-    # 스케일링된 슬로프 데이터를 다시 데이터프레임에 저장
-    data['CMF_Left_Slope'] = scaled_slopes[:, 0]
-    data['CMF_Right_Slope'] = scaled_slopes[:, 1]
-    data['VWAP_Left_Slope'] = scaled_slopes[:, 2]
-    data['VWAP_Right_Slope'] = scaled_slopes[:, 3]
-    data.dropna(inplace=True)
+    data['V_Pattern'] = 0  # 0: 패턴 없음, 1: V자, -1: 역V자
     
-    # V자형/역V자형 패턴 감지
-    data['V_Pattern'] = detect_v_pattern(data)
-    
-    return data.dropna(subset=['V_Pattern'])
+    for i in range(0, len(data)-window+1):
+        window_data = data.iloc[i:i+window]
+        
+        if len(window_data) < window:
+            continue
+            
+        cmf = window_data[cmf_col].values
+        vwap = window_data[vwap_col].values
+        
+        # 최소점 및 최대점 찾기
+        min_point = np.argmin(cmf)
+        max_point = np.argmax(cmf)
+        
+        # 좌우 기울기 계산
+        if min_point > 0 and min_point < len(cmf) - 1:
+            left_slope = (cmf[min_point] - cmf[0]) / (vwap[min_point] - vwap[0] + 1e-6)
+            right_slope = (cmf[-1] - cmf[min_point]) / (vwap[-1] - vwap[min_point] + 1e-6)
+            
+            # V자 패턴 확인
+            if left_slope < -slope_threshold and right_slope > slope_threshold:
+                data.loc[data.index[i + min_point], 'V_Pattern'] = 1  # V자형
+            
+            # 역V자 패턴 확인
+            elif left_slope > slope_threshold and right_slope < -slope_threshold:
+                data.loc[data.index[i + max_point], 'V_Pattern'] = -1  # 역V자형
+            
+    return data
 
 def label_outcomes(data, window=30, threshold=0.2):
     """
     급등/급락 라벨링
+    당일부터 3일 이내의 고가/저가 기준으로 급등/급락 판단
     """
-    future_returns = (data['High'].shift(-window) - data['Close']) / data['Close']
-    data['Outcome'] = np.where(future_returns > threshold, 1,
-                               np.where(future_returns < -threshold, 0, np.nan))  # 급락
-    return data.dropna(subset=['Outcome'])
+    data = data.copy()
+
+    high_3d = data['High'].rolling(window=window, min_periods=1).max()
+    low_3d = data['Low'].rolling(window=window, min_periods=1).min()
+    
+    # 3일 이내 최고가/최저가 기준 수익률 계산
+    high_returns = (high_3d - data['Open']) / data['Close'].shift(1)
+    low_returns = (low_3d - data['Open']) / data['Close'].shift(1)
+    
+    # 급등/급락 라벨링
+    data['Outcome'] = np.where(high_returns > threshold, 1,
+                              np.where(low_returns < -threshold, -1, 0))  # 급락
+    
+    data['LR'] = low_returns
+    data['HR'] = high_returns
+    data['CR'] = (data['Close'].shift(-30) - data['Open']) / data['Close'].shift(1)
+
+    return data
 
 def prepare_dataset(data, feature_cols, label_col):
     """
@@ -111,36 +85,36 @@ def train_model(X, y):
     """
     랜덤 포레스트를 사용한 모델 학습 및 평가
     """
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
 
-    # 성능 평가
-    y_pred = model.predict(X_test)
-    results = pd.DataFrame({
-        '실제결과': y_test,
-        '예측결과': y_pred
-    })
-    accuracy = (results['실제결과'] == results['예측결과']).mean()
-    print(f"모델 예측 정확도: {accuracy:.2%}")
-    
-    return model
+        # 성능 평가
+        y_pred = model.predict(X_test)
+        results = pd.DataFrame({
+            '실제결과': y_test,
+            '예측결과': y_pred
+        })
+        accuracy = (results['실제결과'] == results['예측결과']).mean()
+        print(f"모델 예측 정확도: {accuracy:.2%}")
+        
+        return model
+    except ValueError:
+        print("데이터 분할 중 오류 발생. 모델 학습을 건너뜁니다.")
+        return None
 
 def analyze_v_patterns(data, stock_name):
     """
     V자 패턴과 급등/급락 간의 상관관계 분석
     """
-    v_pattern_df = data[data['V_Pattern'] == 1]  # V자형 패턴
-    inverse_v_pattern_df = data[data['V_Pattern'] == 0]  # 역V자형 패턴
+    v_pattern_df = data[data['V_Pattern'] == 1].dropna()  # V자형 패턴
+    inverse_v_pattern_df = data[data['V_Pattern'] == -1].dropna()  # 역V자형 패턴
+    v_surge_rate = (v_pattern_df['Outcome'] == 1).mean() if len(v_pattern_df) > 0 else 0
+    v_plunge_rate = (v_pattern_df['Outcome'] == -1).mean() if len(v_pattern_df) > 0 else 0
+    inverse_v_surge_rate = (inverse_v_pattern_df['Outcome'] == 1).mean() if len(inverse_v_pattern_df) > 0 else 0
+    inverse_v_plunge_rate = (inverse_v_pattern_df['Outcome'] == -1).mean() if len(inverse_v_pattern_df) > 0 else 0
 
-    # V자 패턴 발생 시 급등/급락 비율
-    v_surge_rate = (v_pattern_df['Outcome'] == 1).mean()
-    v_plunge_rate = (v_pattern_df['Outcome'] == 0).mean()
-    
-    # 역V자 패턴 발생 시 급등/급락 비율
-    inverse_v_surge_rate = (inverse_v_pattern_df['Outcome'] == 1).mean()
-    inverse_v_plunge_rate = (inverse_v_pattern_df['Outcome'] == 0).mean()
-    
     return v_surge_rate, v_plunge_rate, inverse_v_surge_rate, inverse_v_plunge_rate
 
 
@@ -172,7 +146,7 @@ def analyze_all_stocks(combined_prices, threshold=0.2):
         df = utils.tech(ohlcv)
         df = label_v_patterns(df)
         df = label_outcomes(df, window=30, threshold=threshold)
-        #df.to_csv(f"harpoon-images/{stock}.csv")
+        df.to_csv(f"harpoon-images/data/{stock}.csv")
         # 모델 학습
         features = ['MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
         X, y = prepare_dataset(df, feature_cols=features, label_col="Outcome")
@@ -190,7 +164,7 @@ def analyze_all_stocks(combined_prices, threshold=0.2):
             "inverse_v_surge_rate": inverse_v_surge_rate,
             "inverse_v_plunge_rate": inverse_v_plunge_rate
         })
-
+    
     # 전체 평균 계산 및 출력
     avg_v_surge = sum(r['v_surge_rate'] for r in overall_results) / len(overall_results)
     avg_v_plunge = sum(r['v_plunge_rate'] for r in overall_results) / len(overall_results)
@@ -209,6 +183,6 @@ def analyze_all_stocks(combined_prices, threshold=0.2):
 if __name__ == "__main__":
     combined_prices = utils.load_combined_prices('sp500_combined_close_prices.pkl')
     if combined_prices is not None:
-        thresholds = [0.05]
+        thresholds = [0.2]
         for threshold in thresholds:
             analyze_all_stocks(combined_prices, threshold)
