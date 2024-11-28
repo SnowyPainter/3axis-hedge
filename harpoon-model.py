@@ -73,16 +73,16 @@ def evaluate_model(model, X_test, y_test):
     except Exception as e:
         print(f"Error during evaluation: {e}")
 
-def create_model(input_shape, loss='mse'):
+def create_model(input_shape, loss='categorical_crossentropy'):
     model = Sequential([
-        LSTM(256, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 수 증가
-        Dropout(0.5),
-        LSTM(128, activation='tanh', return_sequences=True),
-        Dropout(0.5),
-        LSTM(64, activation='tanh'),
+        LSTM(64, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 수 증가
+        Dropout(0.2),
+        LSTM(32, activation='tanh', return_sequences=True),
+        Dropout(0.2),
+        LSTM(16, activation='tanh'),
         Dense(3, activation='softmax')
     ])
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
     return model
 
 def train_model_with_oversampling(model, X_train, y_train):
@@ -90,7 +90,7 @@ def train_model_with_oversampling(model, X_train, y_train):
     X_train_resampled = X_train_resampled.astype(np.float32)
     y_train_resampled = y_train_resampled.astype(np.float32)  # One-Hot 인코딩된 레이블
     print(f"Starting model training with oversampled data...")
-    checkpoint = ModelCheckpoint(f'HARPOON_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
+    checkpoint = ModelCheckpoint(f'HARPOON_univ.keras', monitor='val_loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
     print(f"Starting HARPOON model training with oversampled data...")
     history = model.fit(
@@ -109,7 +109,7 @@ def create_harpoon(df_with_indicators, symbols):
     model = create_model((seqlen, len(features)), loss='categorical_crossentropy')
     history = train_model_with_oversampling(model, X_train, y_train)
     print("Evaluating trend model...")
-    model = load_model('HARPOON_univ.h5')
+    model = load_model('HARPOON_univ.keras')
     evaluate_model(model, X_test, y_test)
 
 def calculate_technical_indicators(df, symbol):
