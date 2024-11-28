@@ -11,6 +11,9 @@ from ta.volume import on_balance_volume
 from ta.momentum import rsi
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+import os
+import seaborn as sns
 
 def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=90, slope_threshold=0.03):
     """
@@ -146,14 +149,49 @@ def analyze_all_stocks(combined_prices, threshold=0.2):
         df = utils.tech(ohlcv)
         df = label_v_patterns(df)
         df = label_outcomes(df, window=30, threshold=threshold)
-        df.to_csv(f"harpoon-images/data/{stock}.csv")
+        
+        for outcome_type, outcome_val in [("Down", -1), ("Up", 1)]:
+            outcome_indices = df[df['Outcome'] == outcome_val].index
+            stock_dir = f"harpoon-images/{stock}"
+            outcome_dir = f"{stock_dir}/{outcome_type}"
+            os.makedirs(outcome_dir, exist_ok=True)
+            
+            for idx in np.random.choice(outcome_indices, min(2, len(outcome_indices)), replace=False):
+                if idx >= df.index[90]:
+                    prev_data = df.loc[idx - pd.Timedelta(days=90):idx]
+                    plt.figure(figsize=(12, 12))
+                    features = ['MA20', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
+                    sns.pairplot(prev_data[features])
+                    plt.tight_layout()
+                    plt.savefig(f"{outcome_dir}/scatter_{pd.Timestamp(idx).strftime('%Y%m%d')}.png")
+                    plt.close()
+                    
+                    plt.figure(figsize=(12, 6))
+                    scaler = MinMaxScaler()
+                    scaled_data = pd.DataFrame(scaler.fit_transform(prev_data[['Close', 'High', 'Low', 'VWAP', 'CMF']]), 
+                                            columns=['Close', 'High', 'Low', 'VWAP', 'CMF'],
+                                            index=prev_data.index)
+                    plt.plot(scaled_data.index, scaled_data['Close'], label='Close Price')
+                    plt.plot(scaled_data.index, scaled_data['High'], label='High Price') 
+                    plt.plot(scaled_data.index, scaled_data['Low'], label='Low Price')
+                    plt.plot(scaled_data.index, scaled_data['VWAP'], label='MA20')
+                    plt.plot(scaled_data.index, scaled_data['CMF'], label='MA50')
+                    plt.title(f"{stock} Price Chart - {outcome_type} at {pd.Timestamp(idx).strftime('%Y-%m-%d')}")
+                    plt.xlabel("Date")
+                    plt.ylabel("Price")
+                    plt.legend()
+                    plt.grid(True)
+                    plt.savefig(f"{outcome_dir}/price_{pd.Timestamp(idx).strftime('%Y%m%d')}.png")
+                    plt.close()
+        
+        #df.to_csv(f"harpoon-images/data/{stock}.csv")
         # 모델 학습
         features = ['MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
         X, y = prepare_dataset(df, feature_cols=features, label_col="Outcome")
         if len(X) == 0:
             continue
         
-        model = train_model(X, y)
+        #model = train_model(X, y)
         
         # V자 패턴 분석 및 결과 저장
         v_surge_rate, v_plunge_rate, inverse_v_surge_rate, inverse_v_plunge_rate = analyze_v_patterns(df, stock)

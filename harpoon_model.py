@@ -69,6 +69,34 @@ def target_function(data, symbol):
             
     return data
 
+def target_function_finetuned(data, symbol):
+    data = data.copy()
+    target = f'{symbol}_Signal'
+    data[target] = 0  # 0: 패턴 없음, 2: V자, 1: 역V자
+    
+    slope_threshold = 0.01
+
+    for i in range(0, len(data)-window+1):
+        window_data = data.iloc[i:i+window]
+        
+        if len(window_data) < window:
+            continue
+        cmf = window_data[f"{symbol}_CMF"].values
+        vwap = window_data[f"{symbol}_VWAP"].values
+        min_point = np.argmin(cmf)
+        max_point = np.argmax(cmf)
+        if min_point > 0 and min_point < len(cmf) - 1:
+            left_slope = (cmf[min_point] - cmf[0]) / (vwap[min_point] - vwap[0] + 1e-6)
+            right_slope = (cmf[-1] - cmf[min_point]) / (vwap[-1] - vwap[min_point] + 1e-6)
+            if left_slope < -slope_threshold and right_slope > slope_threshold:
+                data.loc[data.index[i + min_point], target] = 2 # V
+            
+            # 역V자 패턴 확인
+            elif left_slope > slope_threshold and right_slope < -slope_threshold:
+                data.loc[data.index[i + max_point], target] = 1 # Inverted V
+            
+    return data
+
 def evaluate_model(model, X_test, y_test):
     try:
         print("Evaluating trend model...")
@@ -99,7 +127,7 @@ def train_model_with_oversampling(model, X_train, y_train):
     X_train_resampled = X_train_resampled.astype(np.float32)
     y_train_resampled = y_train_resampled.astype(np.float32)  # One-Hot 인코딩된 레이블
     print(f"Starting model training with oversampled data...")
-    checkpoint = ModelCheckpoint(f'HARPOON_univ.keras', monitor='val_loss', save_best_only=True, mode='min')
+    checkpoint = ModelCheckpoint(f'HARPOON_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
     print(f"Starting HARPOON model training with oversampled data...")
     history = model.fit(
@@ -118,11 +146,10 @@ def create_harpoon(df_with_indicators, symbols):
     model = create_model((seqlen, len(features)), loss='categorical_crossentropy')
     history = train_model_with_oversampling(model, X_train, y_train)
     print("Evaluating trend model...")
-    model = load_model('HARPOON_univ.keras')
+    model = load_model('HARPOON_univ.h5')
     evaluate_model(model, X_test, y_test)
 
 def calculate_technical_indicators(df, symbol):
-    df = df.copy()
     df[f'{symbol}_MA20'] = df[f'{symbol}_Close'].rolling(window=20).mean()
     df[f'{symbol}_MA50'] = df[f'{symbol}_Close'].rolling(window=50).mean()
     df[f'{symbol}_RSI'] = rsi(df[f'{symbol}_Close'], window=14)
@@ -143,7 +170,7 @@ def calculate_technical_indicators(df, symbol):
     return df
 
 def _finetune_model(model, X, y, model_name, epochs=15, batch_size=64):
-    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.keras', monitor='loss', save_best_only=True, mode='min')
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
     print(f"Fine-tuning {model_name} model...")
     
@@ -157,9 +184,9 @@ def _finetune_model(model, X, y, model_name, epochs=15, batch_size=64):
     )
     return model, history
 
-def finetune_model(symbol, df_with_indicators, original_model_path='HARPOON_univ.keras'):
+def finetune_model(symbol, df_with_indicators, original_model_path='HARPOON_univ.h5'):
     symbol_data = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].copy()
-    symbol_data = target_function(symbol_data, symbol)
+    symbol_data = target_function_finetuned(symbol_data, symbol)
     
     X, y = [], []
     for i in range(len(symbol_data) - seqlen):
@@ -196,6 +223,7 @@ def predict(model, raw, symbol):
     return model.predict(x, verbose=0)[0]
 
 if __name__ == "__main__":
+    utils.create_pickle()
     combined_prices = utils.load_combined_prices('sp500_combined_close_prices.pkl')
     if combined_prices is not None:
         symbols = {col.split('_')[0] for col in combined_prices.columns}
