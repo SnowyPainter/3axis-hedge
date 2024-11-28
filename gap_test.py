@@ -99,7 +99,6 @@ class GapCapture:
         y = np.array(y)
         
         class_counts = Counter(y)
-        
         min_samples = min(class_counts.values())
         k_neighbors = min(max(1, min_samples - 1), 3)  # Ensure k_neighbors is <= min_samples - 1
         smote = SMOTE(k_neighbors=k_neighbors, random_state=42)

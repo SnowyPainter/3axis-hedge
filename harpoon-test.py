@@ -14,7 +14,7 @@ def _process_data(raw, bar):
     }
 
 data = utils.load_historical_for_learning(symbol, utils.today_before(900), utils.today(), interval='1d')
-model = harpoon_model.finetune_model(symbol, harpoon_model.calculate_technical_indicators(data))
+model = harpoon_model.finetune_model(symbol, harpoon_model.calculate_technical_indicators(data, symbol))
 
 bt = backtester.Backtester(symbols, data, 10000000000, 0.0025, _process_data)
 

@@ -15,17 +15,21 @@ import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import MinMaxScaler
 from imblearn.over_sampling import SMOTE
-
+from sklearn.preprocessing import OneHotEncoder
+from imblearn.combine import SMOTETomek
+from collections import Counter
 def normalize(df):
     scaler = MinMaxScaler()
     return pd.DataFrame(scaler.fit_transform(df), columns=df.columns, index=df.index)
 
-def oversample_data(X, y):
+def oversample_data(X, y, min_neighbors=5):
     """Applies SMOTE for oversampling."""
     n_samples, timesteps, n_features = X.shape
     X_reshaped = X.reshape(n_samples, timesteps * n_features)  # Flatten the data for SMOTE
 
-    smote = SMOTE()
+    # k_neighbors를 샘플 수보다 작게 설정
+    k_neighbors = min(min_neighbors, n_samples - 1)  # n_samples보다 작은 값으로 설정
+    smote = SMOTE(k_neighbors=k_neighbors)
     X_resampled, y_resampled = smote.fit_resample(X_reshaped, y)
     
     # Reshape back to original dimensions
@@ -138,15 +142,14 @@ def calculate_technical_indicators(df, symbol):
 
     return df
 
-def _finetune_model(model, X, y, model_name, epochs=30, batch_size=64):
-    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
+def _finetune_model(model, X, y, model_name, epochs=15, batch_size=64):
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.keras', monitor='loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
-    X_train_resampled, y_train_resampled = oversample_data(X, y)
     print(f"Fine-tuning {model_name} model...")
     
     history = model.fit(
-        X_train_resampled,
-        y_train_resampled, 
+        X,
+        y, 
         epochs=epochs,
         batch_size=batch_size,
         validation_split=0.2,
@@ -165,9 +168,22 @@ def finetune_model(symbol, df_with_indicators, original_model_path='HARPOON_univ
     
     X = np.array(X)
     y = np.array(y)
+
+    class_counts = Counter(y)
+    min_samples = min(class_counts.values())
+    k_neighbors = min(max(1, min_samples - 1), 3)  # Ensure k_neighbors is <= min_samples - 1
+    smote = SMOTE(k_neighbors=k_neighbors, random_state=42)
+    smote_tomek = SMOTETomek(smote=smote, random_state=42)
+    n_samples, timesteps, n_features = X.shape
+    X_flat = X.reshape((n_samples, timesteps * n_features))
     
+    X_resampled, y_resampled = smote_tomek.fit_resample(X_flat, y)
+    encoder = OneHotEncoder(categories=[[0,1,2]], sparse_output=False)
+    y_resampled = encoder.fit_transform(y_resampled.reshape(-1, 1))
+    X_resampled = X_resampled.reshape((-1, timesteps, n_features))
     model = load_model(original_model_path)
-    finetuned_model, history = _finetune_model(model, X, y, f'HARPOON_{symbol}')
+
+    finetuned_model, history = _finetune_model(model, X_resampled, y_resampled, f'HARPOON_{symbol}')
     
     return finetuned_model
 

@@ -194,7 +194,8 @@ def load_historical_for_learning(symbol, start, end, interval='1d'):
     d.index = pd.to_datetime(d.index, format="%Y-%m-%d %H:%M:%S%z")
     d = d[d[symbol+'_Open'] != 0]
     d = d[d[symbol+'_Close'] != 0]
-    return d[[symbol+'_Open', symbol+'_Close', symbol+"_Volume", symbol+"_High", symbol+"_Low"]]
+    d[symbol+"_Price"] = d[symbol+"_Open"]
+    return d[[symbol+'_Open', symbol+'_Close', symbol+"_Volume", symbol+"_High", symbol+"_Low", symbol+"_Price"]]
 
 def load_historical_data(symbol, start, end, interval='1d'):
     d = yf.download(symbol, start=start, end=end, interval=interval)
