@@ -37,7 +37,7 @@ def oversample_data(X, y, min_neighbors=5):
     
     return X_resampled, y_resampled
 
-features = ['MA20', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
+features = ['MA20', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV', 'V2_Pattern']
 seqlen = 90
 window = 90
 
@@ -74,7 +74,7 @@ def target_function_finetuned(data, symbol):
     target = f'{symbol}_Signal'
     data[target] = 0  # 0: 패턴 없음, 2: V자, 1: 역V자
     
-    slope_threshold = 0.01
+    slope_threshold = 0.03
 
     for i in range(0, len(data)-window+1):
         window_data = data.iloc[i:i+window]
@@ -149,7 +149,52 @@ def create_harpoon(df_with_indicators, symbols):
     model = load_model('HARPOON_univ.h5')
     evaluate_model(model, X_test, y_test)
 
+def label_v2_patterns(data, symbol, window=90, slope_threshold=0.01):
+    """
+    OBV(y축)와 VWAP(x축)의 산점도에서 V2 패턴 탐지 및 라벨링
+    - 1: 상승(양의 상관관계 또는 역 V자 패턴)
+    - 2: 하강(음의 상관관계)
+    - 0: 패턴 없음
+    """
+    data = data.copy()
+    data['V2_Pattern'] = 0  # 0: 패턴 없음, 1: 상승, 2: 하강
+
+    for i in range(0, len(data) - window + 1):
+        # 현재 window에 해당하는 데이터
+        window_data = data.iloc[i:i + window]
+        
+        if len(window_data) < window:
+            continue
+
+        obv = window_data[f"{symbol}_OBV"].values
+        vwap = window_data[f"{symbol}_VWAP"].values
+
+        # 최소점 및 최대점 탐색
+        min_point = np.argmin(obv)
+        max_point = np.argmax(obv)
+
+        # 역 V자 조건 확인
+        if min_point > 0 and min_point < len(obv) - 1:
+            left_slope = (obv[min_point] - obv[0]) / (vwap[min_point] - vwap[0] + 1e-6)
+            right_slope = (obv[-1] - obv[min_point]) / (vwap[-1] - vwap[min_point] + 1e-6)
+            
+            if left_slope > slope_threshold and right_slope < -slope_threshold:
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 1  # 역 V자
+            
+        # 선형 회귀를 통한 일반적 상승/하강 탐지
+        else:
+            slope, _ = np.polyfit(vwap, obv, 1)  # 1차 회귀선
+
+            if slope > slope_threshold:  # 상승
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 1
+            elif slope < -slope_threshold:  # 하강
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 2
+
+    return data['V2_Pattern']
+
 def calculate_technical_indicators(df, symbol):
+    df = df.copy()
+    
     df[f'{symbol}_MA20'] = df[f'{symbol}_Close'].rolling(window=20).mean()
     df[f'{symbol}_MA50'] = df[f'{symbol}_Close'].rolling(window=50).mean()
     df[f'{symbol}_RSI'] = rsi(df[f'{symbol}_Close'], window=14)
@@ -160,7 +205,7 @@ def calculate_technical_indicators(df, symbol):
     df[f'{symbol}_CCI'] = cci(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=20)
     df[f'{symbol}_ADX'] = adx(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=14)
     df[f'{symbol}_OBV'] = on_balance_volume(df[f'{symbol}_Close'], df[f'{symbol}_Volume'])
-
+    df[f'{symbol}_V2_Pattern'] = label_v2_patterns(df, symbol, window=90)
     df.dropna(inplace=True)
 
     scaler = StandardScaler()
