@@ -177,7 +177,7 @@ def predict(model, raw, symbol):
     x = df[[f"{symbol}_{feature}" for feature in features]].values
 
     x = np.expand_dims(x, axis=0)
-    return model.predict(x, verbose=0)[0][0]
+    return model.predict(x, verbose=0)[0]
 
 if __name__ == "__main__":
     combined_prices = utils.load_combined_prices('sp500_combined_close_prices.pkl')

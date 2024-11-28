@@ -2,6 +2,8 @@ import utils
 import harpoon_model
 import backtester
 
+import numpy as np
+
 symbol = "SMCI"
 symbols = [symbol]
 
@@ -19,13 +21,18 @@ bt = backtester.Backtester(symbols, data, 10000000000, 0.005, _process_data)
 bar = 0
 while True:
     preprocessed, today = bt.go_next()
-    if preprocessed == -1 and bar > len(data) - harpoon_model.seqlen:
+    if preprocessed == -1:
         break
 
-    if bar > harpoon_model.seqlen * 2:
+    if bar > harpoon_model.seqlen * 2 and bar < len(data) - harpoon_model.seqlen:
         start = bar
         end = bar + harpoon_model.seqlen
-        print(harpoon_model.predict(model, data.iloc[start:end], symbol))
+        pred = harpoon_model.predict(model, data.iloc[start:end], symbol)
+        print(pred)
+        if np.argmax(pred) == 1:  # 역 V자 패턴
+            bt.sell(symbol, 0.1)
+        elif np.argmax(pred) == 2:  # V자 패턴 
+            bt.buy(symbol, 0.1)
 
     bar += 1
 
