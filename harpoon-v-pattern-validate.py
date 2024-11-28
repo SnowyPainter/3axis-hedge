@@ -15,7 +15,7 @@ from sklearn.preprocessing import MinMaxScaler
 import os
 import seaborn as sns
 
-def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=90, slope_threshold=0.03):
+def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=90, slope_threshold=0.01):
     """
     CMF(y축)와 VWAP(x축)의 산점도에서 V자/역V자 패턴을 더욱 정밀하게 라벨링
     window 60일 단위로 패턴 탐지
@@ -50,6 +50,50 @@ def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=90, slope_thre
                 data.loc[data.index[i + max_point], 'V_Pattern'] = -1  # 역V자형
             
     return data
+
+def label_v2_patterns(data, obv_col='OBV', vwap_col='VWAP', window=90, slope_threshold=0.01):
+    """
+    OBV(y축)와 VWAP(x축)의 산점도에서 V2 패턴 탐지 및 라벨링
+    - 1: 상승(양의 상관관계 또는 역 V자 패턴)
+    - 2: 하강(음의 상관관계)
+    - 0: 패턴 없음
+    """
+    data = data.copy()
+    data['V2_Pattern'] = 0  # 0: 패턴 없음, 1: 상승, 2: 하강
+
+    for i in range(0, len(data) - window + 1):
+        # 현재 window에 해당하는 데이터
+        window_data = data.iloc[i:i + window]
+        
+        if len(window_data) < window:
+            continue
+
+        obv = window_data[obv_col].values
+        vwap = window_data[vwap_col].values
+
+        # 최소점 및 최대점 탐색
+        min_point = np.argmin(obv)
+        max_point = np.argmax(obv)
+
+        # 역 V자 조건 확인
+        if min_point > 0 and min_point < len(obv) - 1:
+            left_slope = (obv[min_point] - obv[0]) / (vwap[min_point] - vwap[0] + 1e-6)
+            right_slope = (obv[-1] - obv[min_point]) / (vwap[-1] - vwap[min_point] + 1e-6)
+            
+            if left_slope > slope_threshold and right_slope < -slope_threshold:
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 1  # 역 V자
+            
+        # 선형 회귀를 통한 일반적 상승/하강 탐지
+        else:
+            slope, _ = np.polyfit(vwap, obv, 1)  # 1차 회귀선
+
+            if slope > slope_threshold:  # 상승
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 1
+            elif slope < -slope_threshold:  # 하강
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 2
+
+    return data
+
 
 def label_outcomes(data, window=30, threshold=0.2):
     """
@@ -113,13 +157,64 @@ def analyze_v_patterns(data, stock_name):
     """
     v_pattern_df = data[data['V_Pattern'] == 1].dropna()  # V자형 패턴
     inverse_v_pattern_df = data[data['V_Pattern'] == -1].dropna()  # 역V자형 패턴
+    v2_pattern_up_df = data[data['V2_Pattern'] == 1].dropna()  # v2 상승 패턴
+    v2_pattern_down_df = data[data['V2_Pattern'] == 2].dropna()  # v2 하강 패턴
+
     v_surge_rate = (v_pattern_df['Outcome'] == 1).mean() if len(v_pattern_df) > 0 else 0
     v_plunge_rate = (v_pattern_df['Outcome'] == -1).mean() if len(v_pattern_df) > 0 else 0
     inverse_v_surge_rate = (inverse_v_pattern_df['Outcome'] == 1).mean() if len(inverse_v_pattern_df) > 0 else 0
     inverse_v_plunge_rate = (inverse_v_pattern_df['Outcome'] == -1).mean() if len(inverse_v_pattern_df) > 0 else 0
+    
+    v2_up_surge_rate = (v2_pattern_up_df['CR'] > 0).mean() if len(v2_pattern_up_df) > 0 else 0
+    v2_up_plunge_rate = (v2_pattern_up_df['CR'] < 0).mean() if len(v2_pattern_up_df) > 0 else 0
+    v2_down_surge_rate = (v2_pattern_down_df['CR'] > 0).mean() if len(v2_pattern_down_df) > 0 else 0
+    v2_down_plunge_rate = (v2_pattern_down_df['CR'] < 0).mean() if len(v2_pattern_down_df) > 0 else 0
+    
+    return {
+        "v_급등_비율": v_surge_rate,
+        "v_급락_비율": v_plunge_rate,
+        "역v_급등_비율": inverse_v_surge_rate,
+        "역v_급락_비율": inverse_v_plunge_rate,
+        "v2_상승_급등_비율": v2_up_surge_rate,
+        "v2_상승_급락_비율": v2_up_plunge_rate,
+        "v2_하강_급등_비율": v2_down_surge_rate,
+        "v2_하강_급락_비율": v2_down_plunge_rate
+    }
 
-    return v_surge_rate, v_plunge_rate, inverse_v_surge_rate, inverse_v_plunge_rate
-
+def save_image(df, stock):
+    for outcome_type, outcome_val in [("Down", -1), ("Up", 1)]:
+        outcome_indices = df[df['Outcome'] == outcome_val].index
+        stock_dir = f"harpoon-images/{stock}"
+        outcome_dir = f"{stock_dir}/{outcome_type}"
+        os.makedirs(outcome_dir, exist_ok=True)
+        
+        for idx in np.random.choice(outcome_indices, min(2, len(outcome_indices)), replace=False):
+            if idx >= df.index[90]:
+                prev_data = df.loc[idx - pd.Timedelta(days=90):idx]
+                plt.figure(figsize=(12, 12))
+                features = ['MA20', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
+                sns.pairplot(prev_data[features])
+                plt.tight_layout()
+                plt.savefig(f"{outcome_dir}/scatter_{pd.Timestamp(idx).strftime('%Y%m%d')}.png")
+                plt.close()
+                
+                plt.figure(figsize=(12, 6))
+                scaler = MinMaxScaler()
+                scaled_data = pd.DataFrame(scaler.fit_transform(prev_data[['Close', 'High', 'Low', 'VWAP', 'CMF']]), 
+                                        columns=['Close', 'High', 'Low', 'VWAP', 'CMF'],
+                                        index=prev_data.index)
+                plt.plot(scaled_data.index, scaled_data['Close'], label='Close Price')
+                plt.plot(scaled_data.index, scaled_data['High'], label='High Price') 
+                plt.plot(scaled_data.index, scaled_data['Low'], label='Low Price')
+                plt.plot(scaled_data.index, scaled_data['VWAP'], label='MA20')
+                plt.plot(scaled_data.index, scaled_data['CMF'], label='MA50')
+                plt.title(f"{stock} Price Chart - {outcome_type} at {pd.Timestamp(idx).strftime('%Y-%m-%d')}")
+                plt.xlabel("Date")
+                plt.ylabel("Price")
+                plt.legend()
+                plt.grid(True)
+                plt.savefig(f"{outcome_dir}/price_{pd.Timestamp(idx).strftime('%Y%m%d')}.png")
+                plt.close()
 
 def analyze_all_stocks(combined_prices, threshold=0.2):
     """
@@ -148,43 +243,12 @@ def analyze_all_stocks(combined_prices, threshold=0.2):
         # 기술 지표 추가 및 라벨링
         df = utils.tech(ohlcv)
         df = label_v_patterns(df)
+        df = label_v2_patterns(df)
         df = label_outcomes(df, window=30, threshold=threshold)
         
-        for outcome_type, outcome_val in [("Down", -1), ("Up", 1)]:
-            outcome_indices = df[df['Outcome'] == outcome_val].index
-            stock_dir = f"harpoon-images/{stock}"
-            outcome_dir = f"{stock_dir}/{outcome_type}"
-            os.makedirs(outcome_dir, exist_ok=True)
-            
-            for idx in np.random.choice(outcome_indices, min(2, len(outcome_indices)), replace=False):
-                if idx >= df.index[90]:
-                    prev_data = df.loc[idx - pd.Timedelta(days=90):idx]
-                    plt.figure(figsize=(12, 12))
-                    features = ['MA20', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
-                    sns.pairplot(prev_data[features])
-                    plt.tight_layout()
-                    plt.savefig(f"{outcome_dir}/scatter_{pd.Timestamp(idx).strftime('%Y%m%d')}.png")
-                    plt.close()
-                    
-                    plt.figure(figsize=(12, 6))
-                    scaler = MinMaxScaler()
-                    scaled_data = pd.DataFrame(scaler.fit_transform(prev_data[['Close', 'High', 'Low', 'VWAP', 'CMF']]), 
-                                            columns=['Close', 'High', 'Low', 'VWAP', 'CMF'],
-                                            index=prev_data.index)
-                    plt.plot(scaled_data.index, scaled_data['Close'], label='Close Price')
-                    plt.plot(scaled_data.index, scaled_data['High'], label='High Price') 
-                    plt.plot(scaled_data.index, scaled_data['Low'], label='Low Price')
-                    plt.plot(scaled_data.index, scaled_data['VWAP'], label='MA20')
-                    plt.plot(scaled_data.index, scaled_data['CMF'], label='MA50')
-                    plt.title(f"{stock} Price Chart - {outcome_type} at {pd.Timestamp(idx).strftime('%Y-%m-%d')}")
-                    plt.xlabel("Date")
-                    plt.ylabel("Price")
-                    plt.legend()
-                    plt.grid(True)
-                    plt.savefig(f"{outcome_dir}/price_{pd.Timestamp(idx).strftime('%Y%m%d')}.png")
-                    plt.close()
+        #save_image(df, stock)
         
-        #df.to_csv(f"harpoon-images/data/{stock}.csv")
+        df.to_csv(f"harpoon-images/{stock}.csv")
         # 모델 학습
         features = ['MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
         X, y = prepare_dataset(df, feature_cols=features, label_col="Outcome")
@@ -192,28 +256,20 @@ def analyze_all_stocks(combined_prices, threshold=0.2):
             continue
         
         #model = train_model(X, y)
-        
         # V자 패턴 분석 및 결과 저장
-        v_surge_rate, v_plunge_rate, inverse_v_surge_rate, inverse_v_plunge_rate = analyze_v_patterns(df, stock)
+        v_pattern_results = analyze_v_patterns(df, stock)
         overall_results.append({
             "stock": stock,
-            "v_surge_rate": v_surge_rate,
-            "v_plunge_rate": v_plunge_rate,
-            "inverse_v_surge_rate": inverse_v_surge_rate,
-            "inverse_v_plunge_rate": inverse_v_plunge_rate
+            **v_pattern_results
         })
     
     # 전체 평균 계산 및 출력
-    avg_v_surge = sum(r['v_surge_rate'] for r in overall_results) / len(overall_results)
-    avg_v_plunge = sum(r['v_plunge_rate'] for r in overall_results) / len(overall_results)
-    avg_inv_v_surge = sum(r['inverse_v_surge_rate'] for r in overall_results) / len(overall_results)
-    avg_inv_v_plunge = sum(r['inverse_v_plunge_rate'] for r in overall_results) / len(overall_results)
+    avg_results = {key: sum(r[key] for r in overall_results) / len(overall_results) 
+                   for key in v_pattern_results.keys()}
     
     print(f"\n===== {threshold * 100 :.2f}% 등락 전체 평균 분석 결과 =====")
-    print(f"전체 주식 V자 패턴 평균 급등 비율: {avg_v_surge:.2%}")
-    print(f"전체 주식 V자 패턴 평균 급락 비율: {avg_v_plunge:.2%}")
-    print(f"전체 주식 역V자 패턴 평균 급등 비율: {avg_inv_v_surge:.2%}")
-    print(f"전체 주식 역V자 패턴 평균 급락 비율: {avg_inv_v_plunge:.2%}")
+    for key, value in avg_results.items():
+        print(f"전체 주식 {key} 평균 비율: {value:.2%}")
 
     return overall_results
 

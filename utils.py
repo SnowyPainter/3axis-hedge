@@ -160,8 +160,7 @@ def tech(ohlcv):
 
     ohlcv.dropna(inplace=True)
 
-    # Min-Max 스케일링 적용
-    scaler = MinMaxScaler()
+    scaler = StandardScaler()
     scaled_features = ['MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
     ohlcv[scaled_features] = scaler.fit_transform(ohlcv[scaled_features])
 
