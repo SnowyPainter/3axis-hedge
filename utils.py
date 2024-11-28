@@ -14,6 +14,7 @@ from ta.momentum import rsi
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 def create_pickle(directory='./stock_market_data/sp500/', pickle = 'sp500_combined_close_prices.pkl'):
     csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
@@ -165,6 +166,35 @@ def tech(ohlcv):
     ohlcv[scaled_features] = scaler.fit_transform(ohlcv[scaled_features])
 
     return ohlcv
+
+def tech2(ohlcv):
+    ohlcv = ohlcv.copy()
+    ohlcv['MA20'] = ohlcv['Close'].rolling(window=20).mean()
+    ohlcv['MA50'] = ohlcv['Close'].rolling(window=50).mean()
+    ohlcv['RSI'] = rsi(ohlcv['Close'], window=14)
+    ohlcv['VWAP'] = (ohlcv['Close'] * ohlcv['Volume']).cumsum() / ohlcv['Volume'].cumsum()
+    ohlcv['CMF'] = ((ohlcv['Close'] - ohlcv['Low']) - (ohlcv['High'] - ohlcv['Close'])) / \
+                   (ohlcv['High'] - ohlcv['Low']) * ohlcv['Volume']
+    ohlcv['CMF'] = ohlcv['CMF'].rolling(window=20).mean()
+    ohlcv['CCI'] = cci(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=20)
+    ohlcv['ADX'] = adx(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=14)
+    ohlcv['OBV'] = on_balance_volume(ohlcv['Close'], ohlcv['Volume'])
+
+    ohlcv.dropna(inplace=True)
+
+    scaler = StandardScaler()
+    scaled_features = ['MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
+    ohlcv[scaled_features] = scaler.fit_transform(ohlcv[scaled_features])
+
+    return ohlcv
+
+def load_historical_for_learning(symbol, start, end, interval='1d'):
+    d = yf.download(symbol, start=start, end=end, interval=interval)
+    d.rename(columns={'Open': symbol+'_Open', 'Close': symbol+'_Close', 'Volume' : symbol+"_Volume", 'High' : symbol+"_High", 'Low' : symbol+"_Low"}, inplace=True)
+    d.index = pd.to_datetime(d.index, format="%Y-%m-%d %H:%M:%S%z")
+    d = d[d[symbol+'_Open'] != 0]
+    d = d[d[symbol+'_Close'] != 0]
+    return d[[symbol+'_Open', symbol+'_Close', symbol+"_Volume", symbol+"_High", symbol+"_Low"]]
 
 def load_historical_data(symbol, start, end, interval='1d'):
     d = yf.download(symbol, start=start, end=end, interval=interval)

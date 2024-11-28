@@ -13,7 +13,12 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 import glob
 import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 from imblearn.over_sampling import SMOTE
+
+def normalize(df):
+    scaler = MinMaxScaler()
+    return pd.DataFrame(scaler.fit_transform(df), columns=df.columns, index=df.index)
 
 def oversample_data(X, y):
     """Applies SMOTE for oversampling."""
@@ -113,6 +118,7 @@ def create_harpoon(df_with_indicators, symbols):
     evaluate_model(model, X_test, y_test)
 
 def calculate_technical_indicators(df, symbol):
+    df = df.copy()
     df[f'{symbol}_MA20'] = df[f'{symbol}_Close'].rolling(window=20).mean()
     df[f'{symbol}_MA50'] = df[f'{symbol}_Close'].rolling(window=50).mean()
     df[f'{symbol}_RSI'] = rsi(df[f'{symbol}_Close'], window=14)
@@ -131,6 +137,47 @@ def calculate_technical_indicators(df, symbol):
         df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
 
     return df
+
+def _finetune_model(model, X, y, model_name, epochs=30, batch_size=64):
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+    X_train_resampled, y_train_resampled = oversample_data(X, y)
+    print(f"Fine-tuning {model_name} model...")
+    
+    history = model.fit(
+        X_train_resampled,
+        y_train_resampled, 
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_split=0.2,
+        callbacks=[checkpoint, early_stop]
+    )
+    return model, history
+
+def finetune_model(symbol, df_with_indicators, original_model_path='HARPOON_univ.keras'):
+    symbol_data = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].copy()
+    symbol_data = target_function(symbol_data, symbol)
+    
+    X, y = [], []
+    for i in range(len(symbol_data) - seqlen):
+        X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seqlen].values)
+        y.append(symbol_data[f'{symbol}_Signal'].iloc[i+seqlen])
+    
+    X = np.array(X)
+    y = np.array(y)
+    
+    model = load_model(original_model_path)
+    finetuned_model, history = _finetune_model(model, X, y, f'HARPOON_{symbol}')
+    
+    return finetuned_model
+
+def predict(model, raw, symbol):
+    df = calculate_technical_indicators(raw, symbol)
+
+    x = df[[f"{symbol}_{feature}" for feature in features]].values
+
+    x = np.expand_dims(x, axis=0)
+    return model.predict(x, verbose=0)[0][0]
 
 if __name__ == "__main__":
     combined_prices = utils.load_combined_prices('sp500_combined_close_prices.pkl')
