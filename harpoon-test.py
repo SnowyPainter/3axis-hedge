@@ -72,11 +72,9 @@ def detect_and_plot_signals():
     plt.legend()
     plt.grid(True)
     plt.savefig(f"{symbol}_v_inverted_v_patterns.png")
-    plt.show()
     plt.close()
 
-#"TSLA", "NVDA", 
-for symbol in ["SMCI"]:
+for symbol in ["TSLA", "NVDA", "SMCI"]:
     symbols = [symbol]
     data = utils.load_historical_for_learning(symbol, utils.today_before(900), utils.today(), interval='1d')
     if os.path.exists(f"best_HARPOON_{symbol}_finetuned_model.h5"):
