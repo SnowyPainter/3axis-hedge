@@ -13,7 +13,7 @@ import numpy as np
 import pickle
 from imblearn.over_sampling import SMOTE
 import utils
-import localbns
+import localbns.localbns as localbns
 
 def create_pickle(directory='./stock_market_data/sp500/', name = 'sp500_combined_close_prices.pkl'):
     top_companies = [

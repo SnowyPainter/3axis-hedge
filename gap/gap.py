@@ -9,7 +9,7 @@ from tensorflow.keras.optimizers import Adam
 import numpy as np
 import pickle
 
-import localbns
+import localbns.localbns as localbns
 
 def create_pickle(directory='./stock_market_data/sp500/', name = 'sp500_combined_close_prices.pkl'):
     csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))

@@ -16,7 +16,7 @@ from tensorflow.keras.utils import Sequence
 from tensorflow.keras.regularizers import l2
 
 from imblearn.over_sampling import SMOTE
-import localbns
+import localbns.localbns as localbns
 
 def oversample_data(X, y):
     """Applies SMOTE for oversampling."""

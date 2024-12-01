@@ -1,9 +1,9 @@
-import backtester, localbns
+import backtester, localbns.localbns as localbns
 from tensorflow import keras
 import pandas as pd
 import utils
 
-import universial_model
+import localbns.universial_model as universial_model
 
 raw = utils.load_historical_data("XOM", "2022-01-01", "2024-01-01")
 #raw = localbns.nplog(raw)

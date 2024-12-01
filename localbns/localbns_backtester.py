@@ -4,7 +4,7 @@ def min_max_normalize(data):
     normalized_data = [(x - min_val) / (max_val - min_val) for x in data]
     return normalized_data
 
-import localbns, utils, backtester, hedge
+import localbns.localbns as localbns, utils, backtester, localbns.hedge as hedge
 from tensorflow import keras
 
 class LocalBNS:

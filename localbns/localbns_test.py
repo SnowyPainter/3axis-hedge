@@ -5,13 +5,13 @@ def min_max_normalize(data):
     return normalized_data
 
 import os
-import localbns, utils, backtester, hedge
+import localbns.localbns as localbns, utils, backtester, localbns.hedge as hedge
 from tensorflow import keras
 
 class tester:
     
     def __init__(self, symbol):
-        import universial_model
+        import localbns.universial_model as universial_model
         raw = utils.load_historical_data(symbol, "2022-01-01", "2024-01-01")
         d = localbns.calculate_technical_indicators(raw, symbol)
         
