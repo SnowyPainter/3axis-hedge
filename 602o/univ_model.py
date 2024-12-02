@@ -181,6 +181,7 @@ def target_function(data, symbol, lookahead=5):
     return data
 
 def calculate_technical_indicators(df, symbol):
+    df = df.copy()
     
     df[f'{symbol}_MACD'] = ta.trend.MACD(close=df[f'{symbol}_Close']).macd()
     bb_indicator = ta.volatility.BollingerBands(close=df[f'{symbol}_Close'])
@@ -216,9 +217,9 @@ def create_model(df_with_indicators, symbols):
     
     return model
 
-def _finetune_model(model, X, y, model_name, epochs=15, batch_size=32):
-    checkpoint = ModelCheckpoint(f'best_602o_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+def _finetune_model(model, X, y, model_name, epochs=10, batch_size=32):
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
     print(f"Fine-tuning {model_name} model...")
     
     history = model.fit(

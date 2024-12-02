@@ -14,11 +14,10 @@ def detect_and_plot_signals():
     buy_signals = []
     prices = data[f"{symbol}_Price"].values
     bar = 0
-    
     # 신호 감지
     while bar < len(data) - univ_model.seq_length:
-        if bar > univ_model.seq_length * 2:
-            start = bar - univ_model.seq_length
+        if bar > univ_model.seq_length * 3:
+            start = bar - univ_model.seq_length - 164
             end = bar
             pred = univ_model.predict(model, data.iloc[start:end], symbol)
             if np.argmax(pred) == 1:
@@ -30,7 +29,6 @@ def detect_and_plot_signals():
     
     # 신호 군집화
     def cluster_signals(signal_indices):
-        """신호를 군집화하여 각 군집의 중심(평균 단가)을 반환"""
         if not signal_indices:
             return []
         clustering = DBSCAN(eps=10, min_samples=2).fit(np.array(signal_indices).reshape(-1, 1))
@@ -76,4 +74,5 @@ for symbol in ["BTC-USD"]:
     else:
         model = univ_model.finetune_model(symbol, univ_model.calculate_technical_indicators(data, symbol))
     
+    data = utils.load_historical_for_learning(symbol, utils.today_before(1), utils.today(), interval='1m')
     detect_and_plot_signals()
