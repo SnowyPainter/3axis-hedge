@@ -140,6 +140,10 @@ def train_model_with_oversampling(model, X_train, y_train):
     return history
 
 seq_length = 90
+
+# 30으로 바꾸면 어떨까
+
+
 prefix = 'CRYPTO'
 features = ['MACD', 'Bollinger_lband', 'EMA_5', 'ATR', 'RSI','Volume_Change']
 
@@ -189,7 +193,7 @@ def calculate_technical_indicators(df, symbol):
     df[f'{symbol}_EMA_5'] = ta.trend.EMAIndicator(close=df[f'{symbol}_Close'], window=5).ema_indicator()
     df[f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(high=df[f'{symbol}_High'], low=df[f'{symbol}_Low'], close=df[f'{symbol}_Close']).average_true_range()
     df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(close=df[f'{symbol}_Close']).rsi()
-    df[f'{symbol}_Volume_Change'] = df[f'{symbol}_Volume'].pct_change(fill_method=None)
+    df[f'{symbol}_Volume_Change'] = df[f'{symbol}_Volume'].pct_change(periods=5, fill_method=None)
 
     df.dropna(inplace=True)
     df.fillna(0, inplace=True)
@@ -217,9 +221,9 @@ def create_model(df_with_indicators, symbols):
     
     return model
 
-def _finetune_model(model, X, y, model_name, epochs=10, batch_size=32):
+def _finetune_model(model, X, y, model_name, epochs=15, batch_size=32):
     checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
-    early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
+    early_stop = EarlyStopping(monitor='loss', patience=3, restore_best_weights=True)
     print(f"Fine-tuning {model_name} model...")
     
     history = model.fit(
@@ -263,8 +267,7 @@ def finetune_model(symbol, df_with_indicators, original_model_path='602o_univ.h5
     return finetuned_model
 
 def predict(model, raw, symbol):
-    df = calculate_technical_indicators(raw, symbol)
-
+    df = calculate_technical_indicators(raw, symbol).tail(seq_length)
     x = df[[f"{symbol}_{feature}" for feature in features]].values
 
     x = np.expand_dims(x, axis=0)

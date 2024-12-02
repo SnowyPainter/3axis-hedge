@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tensorflow.keras.models import load_model
 from sklearn.cluster import DBSCAN
+from matplotlib.ticker import MaxNLocator
 
 def detect_and_plot_signals():
     sell_signals = []
@@ -16,15 +17,14 @@ def detect_and_plot_signals():
     bar = 0
     # 신호 감지
     while bar < len(data) - univ_model.seq_length:
-        if bar > univ_model.seq_length * 3:
-            start = bar - univ_model.seq_length - 164
+        if bar > univ_model.seq_length * 4 and bar % 1 == 0:
+            start = bar - univ_model.seq_length - 250
             end = bar
             pred = univ_model.predict(model, data.iloc[start:end], symbol)
             if np.argmax(pred) == 1:
                 buy_signals.append(bar)
             elif np.argmax(pred) == 2:
                 sell_signals.append(bar)
-        
         bar += 1
     
     # 신호 군집화
@@ -47,25 +47,41 @@ def detect_and_plot_signals():
     
     # 시각화
     plt.figure(figsize=(12, 6))
-    plt.plot(prices, label=f"{symbol} Price", color="blue")
-    plt.scatter(sell_signals, prices[sell_signals], color="red", label="Sell", marker="v", alpha=1, s=70)
-    plt.scatter(buy_signals, prices[buy_signals], color="green", label="Buy", marker="^", alpha=1, s=70)
+    plt.plot(data.index, prices, label=f"{symbol} Price", color="blue")
+    plt.scatter(data.index[buy_signals], prices[buy_signals], color="green", label="Buy", marker="^", alpha=1, s=70)
+    plt.scatter(data.index[sell_signals], prices[sell_signals], color="red", label="Sell", marker="v", alpha=1, s=70)
     
+    added_buy_label = False
+    added_sell_label = False
+
     for avg_bar, avg_price in buy_clusters:
-        plt.axhline(y=avg_price, color="green", linestyle="--", alpha=0.7, label="Avg Buy Price")
+        if not added_buy_label:
+            plt.axhline(y=avg_price, color="green", linestyle="--", alpha=0.7, label="Avg Buy Price")
+            added_buy_label = True
+        else:
+            plt.axhline(y=avg_price, color="green", linestyle="--", alpha=0.7)
+
     for avg_bar, avg_price in sell_clusters:
-        plt.axhline(y=avg_price, color="red", linestyle="--", alpha=0.7, label="Avg Sell Price")
-    
+        if not added_sell_label:
+            plt.axhline(y=avg_price, color="red", linestyle="--", alpha=0.7, label="Avg Sell Price")
+            added_sell_label = True
+        else:
+            plt.axhline(y=avg_price, color="red", linestyle="--", alpha=0.7)
+
     # 기타 설정
-    plt.title(f"Price Chart with Signals: {symbol}")
-    plt.xlabel("Time (Bar)")
+    plt.title(f"LocalBNS Crypto: {symbol}")
+    plt.xlabel("Time")
     plt.ylabel("Price")
     plt.legend()
     plt.grid(True)
+    
+    # x축 간격 설정
+    plt.gca().xaxis.set_major_locator(MaxNLocator(nbins=10))  # 최대 10개로 간격 띄우기
+    
     plt.savefig(f"{symbol}.png")
     plt.close()
 
-for symbol in ["BTC-USD"]:
+for symbol in ["XRP-USD", "BTC-USD", "ETH-USD", "DOGE-USD"]:
     symbols = [symbol]
     data = utils.load_historical_for_learning(symbol, utils.today_before(8), utils.today(), interval='1m')
     if os.path.exists(f"best_602o_{symbol}_finetuned_model.h5"):
@@ -75,4 +91,5 @@ for symbol in ["BTC-USD"]:
         model = univ_model.finetune_model(symbol, univ_model.calculate_technical_indicators(data, symbol))
     
     data = utils.load_historical_for_learning(symbol, utils.today_before(1), utils.today(), interval='1m')
+    data = data.tail(60*60*3) #3시간어치
     detect_and_plot_signals()
