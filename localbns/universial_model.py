@@ -198,8 +198,8 @@ def sell_target_function(data, symbol):
     return data
 
 def buy_target_function(data, symbol):
-    data['MACD_Change'] = data[f'{symbol}_MACD'].diff()
-    data['Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
+    data[f'{symbol}_MACD_Change'] = data[f'{symbol}_MACD'].diff()
+    data[f'{symbol}_Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff()
     data[f'{symbol}_Signal'] = ((data['MACD_Change'].abs() < 0.02) & 
                     (data['Bollinger_Lower_Change'] < -0.003)).astype(int)
     return data
