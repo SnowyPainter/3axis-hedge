@@ -74,15 +74,18 @@ import numpy as np
 from sklearn.metrics import classification_report
 from tensorflow.keras.models import load_model
 from sklearn.utils import class_weight
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 import tensorflow as tf
-from imblearn.over_sampling import SMOTE
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
+from sklearn.preprocessing import OneHotEncoder
+from imblearn.combine import SMOTETomek
+from collections import Counter
+
 import ta
 
 def evaluate_model(model, X_test, y_test):
@@ -154,6 +157,7 @@ def _create_model(input_shape, loss='categorical_crossentropy'):
 
 def target_function(data, symbol, lookahead=5):
     # NaN 값 제거
+    data = data.copy()
     data = data.dropna()
 
     data[f'{symbol}_MACD_Change'] = data[f'{symbol}_MACD'].diff(periods=lookahead)
@@ -162,8 +166,8 @@ def target_function(data, symbol, lookahead=5):
     data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].pct_change(periods=lookahead, fill_method=None)
     
     # lookahead 적용
-    buy_signal = ((data[f'{symbol}_MACD_Change'].abs() < 0.02) & 
-                    (data[f'{symbol}_Bollinger_Lower_Change'] < -0.003)).astype(int)
+    buy_signal = ((data[f'{symbol}_MACD_Change'].abs() < 0.03) & 
+                    (data[f'{symbol}_Bollinger_Lower_Change'] < -0.001)).astype(int)
     
     sell_signal = ((data[f'{symbol}_EMA_Change'].abs() < 0.015) &
                     (data[f'{symbol}_ATR_Change'] > 0.005)).astype(int)
@@ -211,6 +215,59 @@ def create_model(df_with_indicators, symbols):
     evaluate_model(model, X_test, y_test)
     
     return model
+
+def _finetune_model(model, X, y, model_name, epochs=15, batch_size=32):
+    checkpoint = ModelCheckpoint(f'best_602o_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+    print(f"Fine-tuning {model_name} model...")
+    
+    history = model.fit(
+        X,
+        y, 
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_split=0.2,
+        callbacks=[checkpoint, early_stop]
+    )
+    return model, history
+
+def finetune_model(symbol, df_with_indicators, original_model_path='602o_univ.h5'):
+    symbol_data = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].copy()
+    symbol_data = target_function(symbol_data, symbol)
+    
+    X, y = [], []
+    for i in range(len(symbol_data) - seq_length):
+        X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
+        y.append(symbol_data[f'{symbol}_Signal'].iloc[i+seq_length])
+    
+    X = np.array(X)
+    y = np.array(y)
+
+    class_counts = Counter(y)
+    min_samples = min(class_counts.values())
+    k_neighbors = min(max(1, min_samples - 1), 3)  # Ensure k_neighbors is <= min_samples - 1
+    smote = SMOTE(k_neighbors=k_neighbors, random_state=42)
+    smote_tomek = SMOTETomek(smote=smote, random_state=42)
+    n_samples, timesteps, n_features = X.shape
+    X_flat = X.reshape((n_samples, timesteps * n_features))
+    
+    X_resampled, y_resampled = smote_tomek.fit_resample(X_flat, y)
+    encoder = OneHotEncoder(categories=[[0,1,2]], sparse_output=False)
+    y_resampled = encoder.fit_transform(y_resampled.reshape(-1, 1))
+    X_resampled = X_resampled.reshape((-1, timesteps, n_features))
+    model = load_model(original_model_path)
+
+    finetuned_model, history = _finetune_model(model, X_resampled, y_resampled, f'602o_{symbol}')
+    
+    return finetuned_model
+
+def predict(model, raw, symbol):
+    df = calculate_technical_indicators(raw, symbol)
+
+    x = df[[f"{symbol}_{feature}" for feature in features]].values
+
+    x = np.expand_dims(x, axis=0)
+    return model.predict(x, verbose=0)[0]
 
 if __name__ == "__main__":
     combined_prices = load_pickle()
