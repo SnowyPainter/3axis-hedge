@@ -199,12 +199,12 @@ def target_function(data, symbol, lookahead=3):
     data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].pct_change(periods=lookahead, fill_method=None)
     data[f'{symbol}_MACD_Bollinger_Phase_Correlation'] = data[f'{symbol}_MACD'].rolling(window=10).corr(data[f'{symbol}_Bollinger_lband'])
     buy_signal = (
-        (data[f'{symbol}_MACD_Bollinger_Phase_Correlation'] > 0.7) & 
+        (data[f'{symbol}_MACD_Bollinger_Phase_Correlation'] > 0.85) & 
         (
-            ((data[f'{symbol}_MACD_Change'] > 0.03) & 
-            (data[f'{symbol}_Bollinger_Lower_Change'] > 0.03)) |
-            ((data[f'{symbol}_MACD_Change'] < -0.03) & 
-            (data[f'{symbol}_Bollinger_Lower_Change'] < -0.03))
+            ((data[f'{symbol}_MACD_Change'] > 0.05) & 
+            (data[f'{symbol}_Bollinger_Lower_Change'] > 0.05)) |
+            ((data[f'{symbol}_MACD_Change'] < -0.05) & 
+            (data[f'{symbol}_Bollinger_Lower_Change'] < -0.05))
         )
     )
 
@@ -249,7 +249,7 @@ def create_model(df_with_indicators, symbols):
 
     model = _create_model((seq_length, len(features)), loss='categorical_crossentropy')
     history = train_model_with_oversampling(model, X_train, y_train)
-    print("Evaluating trend model...")
+    print("Evaluating 602o model...")
     
     model = load_model('602o_univ.h5')
     evaluate_model(model, X_test, y_test)

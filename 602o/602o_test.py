@@ -17,8 +17,8 @@ def detect_and_plot_signals():
     bar = 0
     # 신호 감지
     while bar < len(data) - univ_model.seq_length:
-        if bar > univ_model.seq_length * 5 and bar % 1 == 0:
-            start = bar - univ_model.seq_length - 300
+        if bar > univ_model.seq_length * 4 and bar % 1 == 0:
+            start = bar - univ_model.seq_length - 200
             end = bar
             pred = univ_model.predict(model, data.iloc[start:end], symbol)
             if np.argmax(pred) == 1:
@@ -91,5 +91,5 @@ for symbol in ["XRP-USD", "BTC-USD", "ETH-USD", "DOGE-USD"]:
         model = univ_model.finetune_model(symbol, univ_model.calculate_technical_indicators(data, symbol))
     
     data = utils.load_historical_for_learning(symbol, utils.today_before(1), utils.today(), interval='1m')
-    data = data.tail(60*60*3) #3시간어치
+    data = data.tail(60*12) #12시간어치
     detect_and_plot_signals()
