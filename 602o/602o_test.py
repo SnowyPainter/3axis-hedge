@@ -17,8 +17,8 @@ def detect_and_plot_signals():
     bar = 0
     # 신호 감지
     while bar < len(data) - univ_model.seq_length:
-        if bar > univ_model.seq_length * 4 and bar % 1 == 0:
-            start = bar - univ_model.seq_length - 250
+        if bar > univ_model.seq_length * 5 and bar % 1 == 0:
+            start = bar - univ_model.seq_length - 300
             end = bar
             pred = univ_model.predict(model, data.iloc[start:end], symbol)
             if np.argmax(pred) == 1:

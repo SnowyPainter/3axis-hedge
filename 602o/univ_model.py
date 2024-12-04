@@ -4,6 +4,7 @@ sys.path.append('../')
 import utils
 import pandas as pd
 import glob
+import matplotlib.pyplot as plt
 
 def create_pickle():
     crypto_list = pd.read_csv('./binance-cryptos.csv')
@@ -41,7 +42,34 @@ def process_symbol_data(symbol, df_with_indicators, seq_length, features, target
     data = target_function(data, symbol)
     
     data.dropna(inplace=True)
+    '''
+    # 시그널이 1인 인덱스 찾기
+    signal_ones = data[data[f'{symbol}_Signal'] == 1].index
     
+    # 각 시그널 1에 대해 20일 전 데이터 수집
+    plot_data = pd.DataFrame()
+    for idx in signal_ones:
+        start_idx = data.index.get_loc(idx) - 20
+        if start_idx >= 0:
+            plot_range = data.iloc[start_idx:data.index.get_loc(idx)+1]
+            plot_data = pd.concat([plot_data, plot_range])
+    
+    plt.scatter(
+        plot_data[f'{symbol}_MACD'],
+        plot_data[f'{symbol}_Bollinger_lband'],
+        c=plot_data[f'{symbol}_Signal'],
+        cmap='coolwarm',
+        alpha=0.6
+    )
+    plt.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+    plt.axvline(0, color='gray', linestyle='--', linewidth=0.8)
+    plt.xlabel('MACD 변화')
+    plt.ylabel('볼린저 하단 변화')
+    plt.title('매수 시그널 20일 전 데이터 분포')
+    plt.show()
+
+    '''
+
     symbol_X, symbol_y = [], []
     for i in range(len(data) - seq_length):
         symbol_X.append(data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
@@ -60,6 +88,7 @@ def create_and_save_data(symbols, df_with_indicators, seq_length, features, targ
     X, y = [], []
     for symbol in symbols:
         symbol_X, symbol_y = process_symbol_data(symbol, df_with_indicators, seq_length, features, target_function)
+        
         X.extend(symbol_X)
         y.extend(symbol_y)
         
@@ -159,7 +188,7 @@ def _create_model(input_shape, loss='categorical_crossentropy'):
     model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
     return model
 
-def target_function(data, symbol, lookahead=5):
+def target_function(data, symbol, lookahead=3):
     # NaN 값 제거
     data = data.copy()
     data = data.dropna()
@@ -168,11 +197,17 @@ def target_function(data, symbol, lookahead=5):
     data[f'{symbol}_Bollinger_Lower_Change'] = data[f'{symbol}_Bollinger_lband'].diff(periods=lookahead)
     data[f'{symbol}_EMA_Change'] = data[f'{symbol}_EMA_5'].pct_change(periods=lookahead, fill_method=None)
     data[f'{symbol}_ATR_Change'] = data[f'{symbol}_ATR'].pct_change(periods=lookahead, fill_method=None)
-    
-    # lookahead 적용
-    buy_signal = ((data[f'{symbol}_MACD_Change'].abs() < 0.03) & 
-                    (data[f'{symbol}_Bollinger_Lower_Change'] < -0.001)).astype(int)
-    
+    data[f'{symbol}_MACD_Bollinger_Phase_Correlation'] = data[f'{symbol}_MACD'].rolling(window=10).corr(data[f'{symbol}_Bollinger_lband'])
+    buy_signal = (
+        (data[f'{symbol}_MACD_Bollinger_Phase_Correlation'] > 0.7) & 
+        (
+            ((data[f'{symbol}_MACD_Change'] > 0.03) & 
+            (data[f'{symbol}_Bollinger_Lower_Change'] > 0.03)) |
+            ((data[f'{symbol}_MACD_Change'] < -0.03) & 
+            (data[f'{symbol}_Bollinger_Lower_Change'] < -0.03))
+        )
+    )
+
     sell_signal = ((data[f'{symbol}_EMA_Change'].abs() < 0.015) &
                     (data[f'{symbol}_ATR_Change'] > 0.005)).astype(int)
     
@@ -221,7 +256,7 @@ def create_model(df_with_indicators, symbols):
     
     return model
 
-def _finetune_model(model, X, y, model_name, epochs=15, batch_size=32):
+def _finetune_model(model, X, y, model_name, epochs=10, batch_size=32):
     checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='loss', patience=3, restore_best_weights=True)
     print(f"Fine-tuning {model_name} model...")
@@ -239,7 +274,7 @@ def _finetune_model(model, X, y, model_name, epochs=15, batch_size=32):
 def finetune_model(symbol, df_with_indicators, original_model_path='602o_univ.h5'):
     symbol_data = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].copy()
     symbol_data = target_function(symbol_data, symbol)
-    
+
     X, y = [], []
     for i in range(len(symbol_data) - seq_length):
         X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
