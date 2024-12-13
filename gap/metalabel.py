@@ -18,6 +18,8 @@ import pickle
 seqlen = 90
 gap_features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size', 'Meta']
 gap_features_normalized = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
+gap_features_learning = ['EMA_12', 'ATR', 'Volume_Change', 'Meta']
+
 model = load_model('./GAP_univ.h5')
 
 def predict(df_with_indicators, symbol):
@@ -40,15 +42,16 @@ def calculate_technical_indicators(df, symbol):
     df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_lband()
     df[f'{symbol}_Bollinger_band_diff'] = df[f'{symbol}_Bollinger_hband'] - df[f'{symbol}_Bollinger_lband']
     df[f'{symbol}_Volume_Change'] = df[symbol+'_Volume'].pct_change().fillna(0)
-    df[f'{symbol}_Gap_Size'] = df[symbol+'_Open'].pct_change().fillna(0)
-
+    df[f'{symbol}_Gap_Size'] = (df[symbol+'_High'] - df[symbol+'_Open']) / df[symbol+'_Open']
+    
     df.dropna(inplace=True)
     df.fillna(0, inplace=True)
     df.replace([np.inf, -np.inf], 0, inplace=True)
     scaler = StandardScaler()
     for feature in gap_features_normalized:
         df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
-    
+
+    #데이터 전처리 후 prediction 가동    
     predictions = predict(df, symbol)
     df[f'{symbol}_Meta'] = np.nan  # Initialize with NaN
     df[f'{symbol}_Meta'].iloc[seqlen-1:len(predictions)+seqlen-1] = predictions  # Assign predictions to the correct index
@@ -57,15 +60,13 @@ def calculate_technical_indicators(df, symbol):
     df.fillna(0, inplace=True)
     df.replace([np.inf, -np.inf], 0, inplace=True)
 
-    print(df)
-
     return df
 
 def create_pickle(directory='../stock_market_data/sp500/', name = 'sp500_combined_close_prices.pkl'):
     csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
     combined_df = pd.DataFrame()
     top_companies = [
-        'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'GOOG', 'TSLA',
+        'AAPL', 'MSFT', 'AMZN', 'NVDA', 'META', 'GOOG', 'TSLA',
         'PG', 'LLY', 'AVGO',
     ]
 
@@ -95,7 +96,7 @@ def create_pickle(directory='../stock_market_data/sp500/', name = 'sp500_combine
     # Remove columns where all values are NaN
     combined_df = combined_df.dropna(axis=1, how='all')
     removed_columns = original_columns - len(combined_df.columns)
-    print(f"Filtered data from 2015 onwards.")
+    print(f"Filtered data from 2012 onwards.")
     print(f"Removed {removed_columns} columns where all values were NaN.")
     print(f"Remaining columns: {len(combined_df.columns)}")
     combined_df.dropna(inplace=True)
@@ -115,19 +116,20 @@ def save_data_chunk(X, y, prefix, chunk_dir='./chunks'):
     with open(os.path.join(chunk_dir, f'{prefix}data_chunk_{chunk_id}.pkl'), 'wb') as f:
         pickle.dump((np.array(X), np.array(y)), f)
 
+import matplotlib.pyplot as plt
+import numpy as np
+
 def process_symbol_data(symbol, df_with_indicators, seq_length, features, target_function):
     print(f"Processing {symbol}...")
     data = df_with_indicators[[f'{symbol}_Open'] + [f'{symbol}_{feature}' for feature in gap_features]].copy()
+    
     data = target_function(data, symbol)
-    
-    
     data.dropna(inplace=True)
     
     symbol_X, symbol_y = [], []
     for i in range(len(data) - seq_length):
         symbol_X.append(data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values)
         symbol_y.append(data[f'{symbol}_Signal'].iloc[i+seq_length])
-    
     
     print(f"{symbol} : Preprocessed")
     
@@ -190,8 +192,7 @@ def create_model(input_shape, loss='binary_crossentropy'):
 # GAP 타겟 함수
 def GAP_target_function(data, symbol, lookahead_days=1):
     data[f'{symbol}_Signal'] = data.apply(
-        lambda row: 1 if (row[f'{symbol}_Gap_Size'] > 0 and row[f'{symbol}_Meta'] == 1) or 
-                         (row[f'{symbol}_Gap_Size'] < 0 and row[f'{symbol}_Meta'] == 0) 
+        lambda row: 1 if (row[f'{symbol}_Gap_Size'] > 0.01 and row[f'{symbol}_Meta'] == 1)
                          else 0, axis=1
     )
     return data
@@ -233,16 +234,14 @@ def train_model_with_oversampling(model, X_train, y_train):
 def evaluate_model(model, X_test, y_test):
     try:
         print("Evaluating trend model...")
+        y_test = np.argmax(y_test, axis=1).reshape(-1, 1)  # One-hot → 단일 값
         loss, accuracy = model.evaluate(X_test, y_test, verbose=1)
         print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
 
         # 예측 및 추가 평가 지표
-        y_pred = np.argmax(model.predict(X_test), axis=1)  # 다중 클래스일 경우
-        y_true = np.argmax(y_test, axis=1)  # One-hot encoding일 경우
-
-        # 분류 보고서 출력
+        y_pred = (model.predict(X_test) > 0.5).astype("int32")
         print("\nClassification Report:")
-        print(classification_report(y_true, y_pred))
+        print(classification_report(y_test, y_pred))
 
     except Exception as e:
         print(f"Error during evaluation: {e}")
@@ -250,18 +249,19 @@ def evaluate_model(model, X_test, y_test):
 # 학습 데이터 준비 함수 (기존 틀 유지)
 seq_length = 90
 def create_GAP_model(df_with_indicators, symbols):
-    features = gap_features_normalized
+    features = gap_features_learning
     
     if not glob.glob('./chunks/meta_gap_data_chunk_*.pkl'):
         create_and_save_data(symbols, df_with_indicators, seq_length, features, GAP_target_function, 'meta_gap_')
     
     X_train, X_test, y_train, y_test = load_and_split_data('meta_gap_')
-
-    model = create_model((seq_length, len(features)))
-    history = train_model_with_oversampling(model, X_train, y_train)
-    print("Evaluating trend model...")
+    if True:
+        model = create_model((seq_length, len(features)))
+        history = train_model_with_oversampling(model, X_train, y_train)
+        print("Evaluating trend model...")
     
     model = load_model('meta_GAP_univ.h5')
+    print(model.summary())
     evaluate_model(model, X_test, y_test)
     
     return model
@@ -274,18 +274,24 @@ if __name__ == "__main__":
     if combined_prices is not None:
         df_with_indicators = combined_prices.copy()
         new_indicators = {}
-        for stock in symbols:
-            temp_df = pd.DataFrame({
-                f'{stock}_Open': df_with_indicators[f"{stock}_Open"],
-                f'{stock}_Close': df_with_indicators[f"{stock}_Close"],
-                f'{stock}_High': df_with_indicators[f"{stock}_High"],
-                f'{stock}_Low': df_with_indicators[f"{stock}_Low"],
-                f'{stock}_Volume' : df_with_indicators[f"{stock}_Volume"]
-            })
-            temp_df = calculate_technical_indicators(temp_df, stock)
-            for indicator in gap_features:
-                new_indicators[f'{stock}_{indicator}'] = temp_df[f'{stock}_{indicator}']
-        df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
-        df_with_indicators.to_pickle('sp500_combined_prices_with_indicators_GAP.pkl')
-        print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators_GAP.pkl'")
+        if os.path.exists('sp500_combined_prices_with_indicators_GAP.pkl'):
+            df_with_indicators = pd.read_pickle('sp500_combined_prices_with_indicators_GAP.pkl')
+            print("Loaded existing DataFrame from 'sp500_combined_prices_with_indicators_GAP.pkl'")
+        else:
+            for stock in symbols:
+                temp_df = pd.DataFrame({
+                    f'{stock}_Open': df_with_indicators[f"{stock}_Open"],
+                    f'{stock}_Close': df_with_indicators[f"{stock}_Close"],
+                    f'{stock}_High': df_with_indicators[f"{stock}_High"],
+                    f'{stock}_Low': df_with_indicators[f"{stock}_Low"],
+                    f'{stock}_Volume' : df_with_indicators[f"{stock}_Volume"]
+                })
+                temp_df = calculate_technical_indicators(temp_df, stock)
+                for indicator in gap_features:
+                    new_indicators[f'{stock}_{indicator}'] = temp_df[f'{stock}_{indicator}']
+            
+            df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
+            df_with_indicators.to_pickle('sp500_combined_prices_with_indicators_GAP.pkl')
+            print("Saved new DataFrame with indicators to 'sp500_combined_prices_with_indicators_GAP.pkl'")
+        
         create_GAP_model(df_with_indicators, symbols)
