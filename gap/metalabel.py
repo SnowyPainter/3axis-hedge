@@ -64,11 +64,9 @@ def calculate_technical_indicators(df, symbol):
 def create_pickle(directory='../stock_market_data/sp500/', name = 'sp500_combined_close_prices.pkl'):
     csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
     combined_df = pd.DataFrame()
-    # List of top 25 S&P 500 companies by market cap
     top_companies = [
-        'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'GOOG', 'TSLA', 'BRK.B',
-        'UNH', 'JPM', 'JNJ', 'V', 'XOM', 'PG', 'MA', 'LLY', 'HD', 'AVGO', 'CVX',
-        'ABBV', 'MRK', 'PEP', 'KO', 'BAC'
+        'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'GOOG', 'TSLA',
+        'PG', 'LLY', 'AVGO',
     ]
 
     # Filter CSV files to include only the top companies
@@ -89,15 +87,15 @@ def create_pickle(directory='../stock_market_data/sp500/', name = 'sp500_combine
         else:
             combined_df = combined_df.join(df, how='outer')
     combined_df.sort_index(inplace=True)
-    # Filter data from 2005 onwards
-    combined_df = combined_df.loc['2019-01-01':]
+    # Filter data from 2015 onwards
+    combined_df = combined_df.loc['2015-01-01':]
     original_columns = len(combined_df.columns)
     # Remove columns with 30 or more consecutive NaN values
     combined_df = combined_df.dropna(axis=1, thresh=len(combined_df) - 29)
     # Remove columns where all values are NaN
     combined_df = combined_df.dropna(axis=1, how='all')
     removed_columns = original_columns - len(combined_df.columns)
-    print(f"Filtered data from 2010 onwards.")
+    print(f"Filtered data from 2015 onwards.")
     print(f"Removed {removed_columns} columns where all values were NaN.")
     print(f"Remaining columns: {len(combined_df.columns)}")
     combined_df.dropna(inplace=True)
@@ -135,8 +133,7 @@ def process_symbol_data(symbol, df_with_indicators, seq_length, features, target
     
     ones_count = sum(1 for i in symbol_y if i == 1)
     zeros_count = sum(1 for i in symbol_y if i == 0)
-    twos_count = sum(1 for i in symbol_y if i == 2)
-    print(f"{symbol} : Number of 1's: {ones_count}, Number of 0's: {zeros_count}, Number of 2's: {twos_count}")
+    print(f"{symbol} : Number of 1's: {ones_count}, Number of 0's: {zeros_count}")
     
     return symbol_X, symbol_y
 
@@ -178,23 +175,23 @@ def load_and_split_data(prefix, chunk_dir='./chunks'):
     return X_train, X_test, y_train, y_test
 
 # 모델 생성 함수
-def create_model(input_shape, loss='mse'):
+def create_model(input_shape, loss='binary_crossentropy'):
     model = Sequential([
-        LSTM(128, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 수 증가
+        LSTM(128, activation='tanh', return_sequences=True, input_shape=input_shape),
         Dropout(0.4),
         LSTM(64, activation='tanh', return_sequences=True),
         Dropout(0.4),
         LSTM(32, activation='tanh'),
-        Dense(3, activation='softmax')
+        Dense(1, activation='sigmoid')  # 이진 분류를 위한 출력층
     ])
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
     return model
 
 # GAP 타겟 함수
 def GAP_target_function(data, symbol, lookahead_days=1):
     data[f'{symbol}_Signal'] = data.apply(
-        lambda row: 1 if (row[f'{symbol}_Close'] > row[f'{symbol}_Open'] and row[f'{symbol}_Gap_Size'] >= 0 and row[f'{symbol}_Meta'] == 1) or 
-                         (row[f'{symbol}_Close'] < row[f'{symbol}_Open'] and row[f'{symbol}_Gap_Size'] == 0 and row[f'{symbol}_Meta'] == 0) 
+        lambda row: 1 if (row[f'{symbol}_Gap_Size'] > 0 and row[f'{symbol}_Meta'] == 1) or 
+                         (row[f'{symbol}_Gap_Size'] < 0 and row[f'{symbol}_Meta'] == 0) 
                          else 0, axis=1
     )
     return data
@@ -260,7 +257,7 @@ def create_GAP_model(df_with_indicators, symbols):
     
     X_train, X_test, y_train, y_test = load_and_split_data('meta_gap_')
 
-    model = create_model((seq_length, len(features)), loss='categorical_crossentropy')
+    model = create_model((seq_length, len(features)))
     history = train_model_with_oversampling(model, X_train, y_train)
     print("Evaluating trend model...")
     
