@@ -5,7 +5,7 @@ import numpy as np
 import ta
 from sklearn.preprocessing import OneHotEncoder
 from imblearn.combine import SMOTETomek
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 from imblearn.over_sampling import SMOTE
 from keras.callbacks import ModelCheckpoint, EarlyStopping
 import numpy as np
@@ -26,7 +26,7 @@ def calculate_technical_indicators(df, symbol):
     df.dropna(inplace=True)
     df.fillna(0, inplace=True)
     df.replace([np.inf, -np.inf], 0, inplace=True)
-    scaler = MinMaxScaler()
+    scaler = StandardScaler()
     for feature in gap_features:
         df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
         

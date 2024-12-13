@@ -1,17 +1,67 @@
-import os
 import pandas as pd
-import glob
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+import numpy as np
+import ta
+from sklearn.preprocessing import OneHotEncoder
+from imblearn.combine import SMOTETomek
+from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
-import numpy as np
+from keras.callbacks import ModelCheckpoint, EarlyStopping
+from sklearn.metrics import classification_report
+from tensorflow import keras
+import os, glob
 import pickle
 
-import localbns.localbns as localbns
+seqlen = 90
+gap_features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size', 'Meta']
+gap_features_normalized = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
+model = load_model('./GAP_univ.h5')
 
-def create_pickle(directory='./stock_market_data/sp500/', name = 'sp500_combined_close_prices.pkl'):
+def predict(df_with_indicators, symbol):
+    features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
+    predictions = []
+
+    for i in range(len(df_with_indicators) - seqlen + 1):
+        X = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].iloc[i:i + seqlen].values
+        X = X.reshape(1, seqlen, len(features))
+        prediction = model.predict(X, verbose=0)
+        predictions.append(np.argmax(prediction[0]))
+    
+    return np.array(predictions)
+
+def calculate_technical_indicators(df, symbol):
+    df[f'{symbol}_EMA_12'] = ta.trend.EMAIndicator(df[symbol+'_Open'], window=12).ema_indicator()
+    df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Open'], window=14).rsi()
+    df[f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Open'], window=14).average_true_range()
+    df[f'{symbol}_Bollinger_hband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_hband()
+    df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_lband()
+    df[f'{symbol}_Bollinger_band_diff'] = df[f'{symbol}_Bollinger_hband'] - df[f'{symbol}_Bollinger_lband']
+    df[f'{symbol}_Volume_Change'] = df[symbol+'_Volume'].pct_change().fillna(0)
+    df[f'{symbol}_Gap_Size'] = df[symbol+'_Open'].pct_change().fillna(0)
+
+    df.dropna(inplace=True)
+    df.fillna(0, inplace=True)
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+    scaler = StandardScaler()
+    for feature in gap_features_normalized:
+        df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
+    
+    predictions = predict(df, symbol)
+    df[f'{symbol}_Meta'] = np.nan  # Initialize with NaN
+    df[f'{symbol}_Meta'].iloc[seqlen-1:len(predictions)+seqlen-1] = predictions  # Assign predictions to the correct index
+
+    df.dropna(inplace=True)
+    df.fillna(0, inplace=True)
+    df.replace([np.inf, -np.inf], 0, inplace=True)
+
+    print(df)
+
+    return df
+
+def create_pickle(directory='../stock_market_data/sp500/', name = 'sp500_combined_close_prices.pkl'):
     csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
     combined_df = pd.DataFrame()
     # List of top 25 S&P 500 companies by market cap
@@ -40,7 +90,7 @@ def create_pickle(directory='./stock_market_data/sp500/', name = 'sp500_combined
             combined_df = combined_df.join(df, how='outer')
     combined_df.sort_index(inplace=True)
     # Filter data from 2005 onwards
-    combined_df = combined_df.loc['2010-01-01':]
+    combined_df = combined_df.loc['2019-01-01':]
     original_columns = len(combined_df.columns)
     # Remove columns with 30 or more consecutive NaN values
     combined_df = combined_df.dropna(axis=1, thresh=len(combined_df) - 29)
@@ -90,7 +140,6 @@ def process_symbol_data(symbol, df_with_indicators, seq_length, features, target
     
     return symbol_X, symbol_y
 
-from sklearn.preprocessing import OneHotEncoder
 def create_and_save_data(symbols, df_with_indicators, seq_length, features, target_function, prefix):
     X, y = [], []
     for symbol in symbols:
@@ -143,17 +192,12 @@ def create_model(input_shape, loss='mse'):
 
 # GAP 타겟 함수
 def GAP_target_function(data, symbol, lookahead_days=1):
-    data[f'{symbol}_Signal'] = data[f'{symbol}_Gap_Size'].apply(
-        lambda x: 1 if x >= 0.025 else (0 if x <= -0.025 else 2)
+    data[f'{symbol}_Signal'] = data.apply(
+        lambda row: 1 if (row[f'{symbol}_Close'] > row[f'{symbol}_Open'] and row[f'{symbol}_Gap_Size'] >= 0 and row[f'{symbol}_Meta'] == 1) or 
+                         (row[f'{symbol}_Close'] < row[f'{symbol}_Open'] and row[f'{symbol}_Gap_Size'] == 0 and row[f'{symbol}_Meta'] == 0) 
+                         else 0, axis=1
     )
     return data
-
-import numpy as np
-from sklearn.utils import class_weight
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
-from keras.callbacks import ModelCheckpoint, EarlyStopping
-import tensorflow as tf
-from imblearn.over_sampling import SMOTE
 
 def oversample_data(X, y):
     """Applies SMOTE for oversampling."""
@@ -173,21 +217,10 @@ def train_model_with_oversampling(model, X_train, y_train):
     
     X_train_resampled = X_train_resampled.astype(np.float32)
     y_train_resampled = y_train_resampled.astype(np.float32)  # One-Hot 인코딩된 레이블
-    
-    # Calculate class weights for balancing
-    y_train_1d = np.argmax(y_train, axis=1)  # Assuming y_train_resampled is one-hot encoded
 
-    # Calculate class weights for balancing
-    class_weights = class_weight.compute_class_weight(
-        'balanced',
-        classes=np.unique(y_train_1d),  # Use 1D class labels
-        y=y_train_1d
-    )
-    class_weight_dict = dict(enumerate(class_weights))
-    
     print(f"Starting model training with oversampled data...")
     
-    checkpoint = ModelCheckpoint(f'GAP_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
+    checkpoint = ModelCheckpoint(f'meta_GAP_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
     early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
     print(f"Starting gap model training with oversampled data...")
@@ -196,21 +229,10 @@ def train_model_with_oversampling(model, X_train, y_train):
         epochs=50,
         batch_size=48,
         validation_split=0.2,
-        callbacks=[checkpoint, early_stop],
-        #class_weight=class_weight_dict
+        callbacks=[checkpoint, early_stop]
     )
     return history
 
-import numpy as np
-from sklearn.metrics import classification_report
-from tensorflow.keras.models import load_model
-from tensorflow import keras
-
-# 모델 로드 함수
-def load_model_with_error_handling(model_path):
-    return keras.models.load_model(model_path)
-
-# 평가 함수
 def evaluate_model(model, X_test, y_test):
     try:
         print("Evaluating trend model...")
@@ -233,44 +255,19 @@ seq_length = 90
 def create_GAP_model(df_with_indicators, symbols):
     features = gap_features_normalized
     
-    if not glob.glob('./chunks/gap_data_chunk_*.pkl'):
-        create_and_save_data(symbols, df_with_indicators, seq_length, features, GAP_target_function, 'gap_')
+    if not glob.glob('./chunks/meta_gap_data_chunk_*.pkl'):
+        create_and_save_data(symbols, df_with_indicators, seq_length, features, GAP_target_function, 'meta_gap_')
     
-    X_train, X_test, y_train, y_test = load_and_split_data('gap_')
+    X_train, X_test, y_train, y_test = load_and_split_data('meta_gap_')
 
     model = create_model((seq_length, len(features)), loss='categorical_crossentropy')
     history = train_model_with_oversampling(model, X_train, y_train)
     print("Evaluating trend model...")
     
-    model = load_model_with_error_handling('GAP_univ.h5')
+    model = load_model('meta_GAP_univ.h5')
     evaluate_model(model, X_test, y_test)
     
     return model
-
-
-import ta
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.preprocessing import StandardScaler
-
-gap_features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size']
-gap_features_normalized = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
-def calculate_technical_indicators(df, symbol):
-    df[f'{symbol}_EMA_12'] = ta.trend.EMAIndicator(df[symbol+'_Open'], window=12).ema_indicator()
-    df[f'{symbol}_RSI'] = ta.momentum.RSIIndicator(df[symbol+'_Open'], window=14).rsi()
-    df[f'{symbol}_ATR'] = ta.volatility.AverageTrueRange(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Open'], window=14).average_true_range()
-    df[f'{symbol}_Bollinger_hband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_hband()
-    df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_lband()
-    df[f'{symbol}_Bollinger_band_diff'] = df[f'{symbol}_Bollinger_hband'] - df[f'{symbol}_Bollinger_lband']
-    df[f'{symbol}_Volume_Change'] = df[symbol+'_Volume'].pct_change().fillna(0)
-    df[f'{symbol}_Gap_Size'] = (df[symbol+'_Open'] - df[f'{symbol}_Close'].shift(1)) / df[f'{symbol}_Close'].shift(1)
-    df.dropna(inplace=True)
-    df.fillna(0, inplace=True)
-    df.replace([np.inf, -np.inf], 0, inplace=True)
-    scaler = StandardScaler()
-    for feature in gap_features_normalized:
-        df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
-    
-    return df
 
 if __name__ == "__main__":
     create_pickle(name='sp500_combined_close_volume_prices.pkl')
