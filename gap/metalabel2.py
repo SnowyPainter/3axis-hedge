@@ -26,12 +26,12 @@ def predict(df_with_indicators, symbol):
         down_prob = prediction[0]  # 하락 확률
         up_prob = prediction[1]    # 상승 확률
         neutral_prob = prediction[2]  # 횡보 확률
-        if neutral_prob < 0.8 and up_prob > 1.5 * down_prob:
-            predictions.append(1)  # 상승 확률이 하락 확률보다 1.5배 이상일 때 1
-        elif down_prob > 1.5 * up_prob:
-            predictions.append(0)  # 하락 확률이 상승 확률보다 1.5배 이상일 때 0
+        if neutral_prob < 0.6 and up_prob > down_prob:
+            predictions.append(1)
+        elif down_prob > up_prob:
+            predictions.append(0)
         else:
-            predictions.append(0)  # 나머지 경우에는 0으로 라벨링
+            predictions.append(2)
     
     return np.array(predictions)
 
@@ -48,8 +48,27 @@ class MetaLabelingRandomForest:
             'MACD', 'Stoch', 'WilliamsR', 'Price_ROC', 'CCI', 'ADX', 'DMI', 'VWAP', 'Momentum'
         ]
 
+        '''
+                feature  importance
+2                   ATR    0.084471
+12                 VWAP    0.080024
+0                EMA_12    0.076712
+3   Bollinger_band_diff    0.074709
+8             Price_ROC    0.068430
+4         Volume_Change    0.067456
+10                  ADX    0.066434
+13             Momentum    0.065151
+5                  MACD    0.064213
+11                  DMI    0.061200
+9                   CCI    0.060892
+1                   RSI    0.060593
+7             WilliamsR    0.059514
+6                 Stoch    0.058651
+14                 Meta    0.051551
+        '''
+
         self.gap_features_learning = [
-            'Meta', 'Volume_Change', 'ADX', 'CCI', 'VWAP'
+            'Meta', 'ATR', 'VWAP', 'EMA_12', 'Bollinger_band_diff', 'Price_ROC'
         ]
 
     def calculate_technical_indicators(self, df, symbol):
@@ -88,12 +107,14 @@ class MetaLabelingRandomForest:
         df.dropna(inplace=True)
         df.replace([np.inf, -np.inf], 0, inplace=True)
 
+        df[f'{symbol}_Meta'] = scaler.fit_transform(df[[f'{symbol}_Meta']])
+
         return df
     
     def gap_target_function(self, data, symbol, lookahead_days=1):
         """Create signal for meta labeling"""
         data[f'{symbol}_Signal'] = data.apply(
-            lambda row: 1 if (row[f'{symbol}_Gap_Size'] > 0.005 and row[f'{symbol}_Meta'] == 1)
+            lambda row: 1 if (row[f'{symbol}_Gap_Size'] > 0.005)
                              else 0, axis=1
         )
         return data
