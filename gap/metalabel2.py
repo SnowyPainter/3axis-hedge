@@ -1,3 +1,6 @@
+import sys, os
+sys.path.append('../')
+
 import pandas as pd
 import numpy as np
 import os
@@ -7,7 +10,7 @@ import ta
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 import joblib
 from tensorflow.keras.models import load_model
 import shutil
@@ -23,15 +26,7 @@ def predict(df_with_indicators, symbol):
         X = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].iloc[i:i + seqlen].values
         X = X.reshape(1, seqlen, len(features))
         prediction = model.predict(X, verbose=0)[0] 
-        down_prob = prediction[0]  # 하락 확률
-        up_prob = prediction[1]    # 상승 확률
-        neutral_prob = prediction[2]  # 횡보 확률
-        if neutral_prob < 0.6 and up_prob > down_prob:
-            predictions.append(1)
-        elif down_prob > up_prob:
-            predictions.append(0)
-        else:
-            predictions.append(2)
+        predictions.append(np.argmax(prediction))
     
     return np.array(predictions)
 
@@ -43,29 +38,12 @@ class MetaLabelingRandomForest:
             'Gap_Size', 'MACD', 'Stoch', 'WilliamsR', 'Price_ROC', 
             'CCI', 'ADX', 'Momentum', 'DMI', 'VWAP', 'Meta'
         ]
+
+        #Meta 만 따로 normalized
         self.gap_features_normalized = [
-            'EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 
+            'EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change',
             'MACD', 'Stoch', 'WilliamsR', 'Price_ROC', 'CCI', 'ADX', 'DMI', 'VWAP', 'Momentum'
         ]
-
-        '''
-                feature  importance
-2                   ATR    0.084471
-12                 VWAP    0.080024
-0                EMA_12    0.076712
-3   Bollinger_band_diff    0.074709
-8             Price_ROC    0.068430
-4         Volume_Change    0.067456
-10                  ADX    0.066434
-13             Momentum    0.065151
-5                  MACD    0.064213
-11                  DMI    0.061200
-9                   CCI    0.060892
-1                   RSI    0.060593
-7             WilliamsR    0.059514
-6                 Stoch    0.058651
-14                 Meta    0.051551
-        '''
 
         self.gap_features_learning = [
             'Meta', 'ATR', 'VWAP', 'EMA_12', 'Bollinger_band_diff', 'Price_ROC'
@@ -196,32 +174,18 @@ class MetaLabelingRandomForest:
         return rf_classifier
 
     def evaluate_model(self, model, X_test, y_test):
+        import features
+
         """Evaluate model performance"""
         y_pred = model.predict(X_test)
-        
+        original_accuracy = accuracy_score(y_test, y_pred)
         print("\nConfusion Matrix:")
         print(confusion_matrix(y_test, y_pred))
         
         print("\nClassification Report:")
         print(classification_report(y_test, y_pred))
         
-        feature_importance = pd.DataFrame({
-            'feature': self.gap_features_learning,
-            'importance': model.feature_importances_
-        }).sort_values('importance', ascending=False)
-        
-        print("\nFeature Importance:")
-        print(feature_importance)
-
-        from sklearn.metrics import precision_recall_curve
-        import matplotlib.pyplot as plt
-        precision, recall, thresholds = precision_recall_curve(y_test, model.predict_proba(X_test)[:, 1])
-
-        plt.plot(recall, precision)
-        plt.xlabel('Recall')
-        plt.ylabel('Precision')
-        plt.title('Precision-Recall Curve')
-        plt.show()
+        features.features_MDA_importances(X_test, y_test, model, original_accuracy, self.gap_features_learning)
 
     def run_meta_labeling(self, combined_prices, symbols):
         """Main method to run meta labeling"""
