@@ -1,9 +1,12 @@
 import sys, os
 sys.path.append('../')
 
+from xgboost import XGBClassifier
+from sklearn.model_selection import GridSearchCV
 import pandas as pd
 import numpy as np
 import os
+from imblearn.over_sampling import SMOTE
 import glob
 import pickle
 import ta
@@ -31,7 +34,7 @@ def predict(df_with_indicators, symbol):
     return np.array(predictions)
 
 class MetaLabelingRandomForest:
-    def __init__(self, seq_length=90):
+    def __init__(self, seq_length=30):
         self.seq_length = seq_length
         self.gap_features = [
             'EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 
@@ -58,7 +61,7 @@ class MetaLabelingRandomForest:
         df[f'{symbol}_Bollinger_lband'] = ta.volatility.BollingerBands(df[symbol+'_Open']).bollinger_lband()
         df[f'{symbol}_Bollinger_band_diff'] = df[f'{symbol}_Bollinger_hband'] - df[f'{symbol}_Bollinger_lband']
         df[f'{symbol}_Volume_Change'] = df[symbol+'_Volume'].pct_change().fillna(0)
-        df[f'{symbol}_Gap_Size'] = (df[symbol+'_High'] - df[symbol+'_Open']) / df[symbol+'_Open']
+        df[f'{symbol}_Gap_Size'] = (df[symbol+'_Close'] - df[symbol+'_Open']) / df[symbol+'_Open']
         macd = ta.trend.MACD(df[symbol+'_Open'])
         df[f'{symbol}_MACD'] = macd.macd()
         df[f'{symbol}_Stoch'] = ta.momentum.StochasticOscillator(df[symbol+'_High'], df[symbol+'_Low'], df[symbol+'_Open']).stoch()
@@ -92,7 +95,7 @@ class MetaLabelingRandomForest:
     def gap_target_function(self, data, symbol, lookahead_days=1):
         """Create signal for meta labeling"""
         data[f'{symbol}_Signal'] = data.apply(
-            lambda row: 1 if (row[f'{symbol}_Gap_Size'] > 0.005)
+            lambda row: 1 if (row[f'{symbol}_Gap_Size'] > 0)
                              else 0, axis=1
         )
         return data
@@ -158,20 +161,41 @@ class MetaLabelingRandomForest:
     
     def train_random_forest(self, X_train, y_train):
         """Train Random Forest Classifier"""
+
+        #smote = SMOTE(random_state=42)
+        #X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+    
+        #Best Parameters: {'class_weight': None, 'max_depth': 10, 'min_samples_leaf': 2, 'min_samples_split': 10, 'n_estimators': 100}
         rf_classifier = RandomForestClassifier(
             n_estimators=100, 
-            max_depth=30, 
+            max_depth=10, 
             min_samples_split=10, 
-            min_samples_leaf=4, 
-            random_state=42, 
-            class_weight='balanced'
+            min_samples_leaf=2, 
+            random_state=42,
+            class_weight=None
         )
-        
         rf_classifier.fit(X_train, y_train)
-        
         joblib.dump(rf_classifier, 'meta_gap_random_forest.joblib')
-        
         return rf_classifier
+
+    def train_xgboost(self, X_train, y_train):
+        """Train XGBoost Classifier"""
+        smote = SMOTE(random_state=42)
+        X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+
+        xgb_classifier = XGBClassifier(
+            n_estimators=200,
+            max_depth=10,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+
+        xgb_classifier.fit(X_resampled, y_resampled)
+        joblib.dump(xgb_classifier, 'meta_gap_xgboost.joblib')
+
+        return xgb_classifier
 
     def evaluate_model(self, model, X_test, y_test):
         import features
@@ -210,8 +234,8 @@ class MetaLabelingRandomForest:
             df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
             df_with_indicators.to_pickle('sp500_combined_prices_with_indicators_GAP.pkl')
         
-        #if not glob.glob('./chunks/meta_gap_data_chunk_*.pkl'):
-        X, y = self.create_dataset(symbols, df_with_indicators)
+        if not glob.glob('./chunks/meta_gap_data_chunk_*.pkl'):
+            X, y = self.create_dataset(symbols, df_with_indicators)
 
         X, y = self.load_dataset()
 

@@ -157,9 +157,9 @@ def tech(ohlcv):
     ohlcv['CCI'] = cci(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=20)
     ohlcv['ADX'] = adx(ohlcv['High'], ohlcv['Low'], ohlcv['Close'], window=14)
     ohlcv['OBV'] = on_balance_volume(ohlcv['Close'], ohlcv['Volume'])
-
+    
     ohlcv.dropna(inplace=True)
-
+    
     scaler = StandardScaler()
     scaled_features = ['MA20', 'MA50', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV']
     ohlcv[scaled_features] = scaler.fit_transform(ohlcv[scaled_features])

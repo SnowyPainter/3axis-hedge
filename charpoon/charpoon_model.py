@@ -1,0 +1,259 @@
+import sys, os
+sys.path.append('../')
+
+import utils
+
+from ta import add_all_ta_features
+from ta.trend import adx, cci
+from ta.volume import on_balance_volume
+from ta.momentum import rsi
+import pandas as pd
+import numpy as np
+from sklearn.metrics import classification_report
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+import glob
+import tensorflow as tf
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+from imblearn.over_sampling import SMOTE
+from sklearn.preprocessing import OneHotEncoder
+from imblearn.combine import SMOTETomek
+from collections import Counter
+def normalize(df):
+    scaler = MinMaxScaler()
+    return pd.DataFrame(scaler.fit_transform(df), columns=df.columns, index=df.index)
+
+def oversample_data(X, y, min_neighbors=5):
+    """Applies SMOTE for oversampling."""
+    n_samples, timesteps, n_features = X.shape
+    X_reshaped = X.reshape(n_samples, timesteps * n_features)  # Flatten the data for SMOTE
+    k_neighbors = min(min_neighbors, n_samples - 1)
+    smote = SMOTE(k_neighbors=k_neighbors)
+    X_resampled, y_resampled = smote.fit_resample(X_reshaped, y)
+    X_resampled = X_resampled.reshape(-1, timesteps, n_features)
+    
+    return X_resampled, y_resampled
+
+features = ['MA20', 'RSI', 'VWAP', 'CMF', 'CCI', 'ADX', 'OBV', 'V2_Pattern']
+seqlen = 72
+window = seqlen
+
+def target_function(data, symbol):
+    data = data.copy()
+    target = f'{symbol}_Signal'
+    data[target] = 0  # 0: 패턴 없음, 2: V자, 1: 역V자
+    slope_threshold = 0.02
+
+    for i in range(0, len(data)-window+1):
+        window_data = data.iloc[i:i+window]
+        
+        if len(window_data) < window:
+            continue
+        cmf = window_data[f"{symbol}_CMF"].values
+        vwap = window_data[f"{symbol}_VWAP"].values
+        min_point = np.argmin(cmf)
+        max_point = np.argmax(cmf)
+        
+        if min_point > 0 and min_point < len(cmf) - 1:
+            left_slope = (cmf[min_point] - cmf[0]) / (vwap[min_point] - vwap[0] + 1e-6)
+            right_slope = (cmf[-1] - cmf[min_point]) / (vwap[-1] - vwap[min_point] + 1e-6)
+            if left_slope < -slope_threshold and right_slope > slope_threshold:
+                data.loc[data.index[i + min_point], target] = 2 # V
+            elif left_slope > slope_threshold and right_slope < -slope_threshold:
+                data.loc[data.index[i + max_point], target] = 1 # Inverted V
+            
+    return data
+
+def evaluate_model(model, X_test, y_test):
+    try:
+        print("Evaluating trend model...")
+        loss, accuracy = model.evaluate(X_test, y_test, verbose=1)
+        print(f"Loss: {loss:.5f}, Accuracy: {accuracy:.5f}")
+        y_pred = np.argmax(model.predict(X_test), axis=1)
+        y_true = np.argmax(y_test, axis=1)
+        print("\nClassification Report:")
+        print(classification_report(y_true, y_pred))
+
+    except Exception as e:
+        print(f"Error during evaluation: {e}")
+
+def create_model(input_shape, loss='categorical_crossentropy'):
+    model = Sequential([
+        LSTM(64, activation='tanh', return_sequences=True, input_shape=input_shape),  # LSTM 유닛 수 증가
+        Dropout(0.2),
+        LSTM(32, activation='tanh', return_sequences=True),
+        Dropout(0.2),
+        LSTM(16, activation='tanh'),
+        Dense(3, activation='softmax')
+    ])
+    model.compile(optimizer='adam', loss=loss, metrics=['accuracy'])
+    return model
+
+def train_model_with_oversampling(model, X_train, y_train):
+    X_train_resampled, y_train_resampled = oversample_data(X_train, y_train)
+    X_train_resampled = X_train_resampled.astype(np.float32)
+    y_train_resampled = y_train_resampled.astype(np.float32)  # One-Hot 인코딩된 레이블
+    print(f"Starting model training with oversampled data...")
+    checkpoint = ModelCheckpoint(f'CHARPOON_univ.h5', monitor='val_loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    print(f"Starting HARPOON model training with oversampled data...")
+    history = model.fit(
+        X_train_resampled, y_train_resampled,
+        epochs=50,
+        batch_size=32,
+        validation_split=0.2,
+        callbacks=[checkpoint, early_stop]
+    )
+    return history
+
+def create_harpoon(df_with_indicators, symbols):
+    if not glob.glob('./chunks/charpoon_data_chunk_*.pkl'):
+        utils.create_and_save_data_012(symbols, df_with_indicators, seqlen, features, target_function, 'charpoon_')
+    X_train, X_test, y_train, y_test = utils.load_and_split_data_onehot('charpoon_')
+    model = create_model((seqlen, len(features)), loss='categorical_crossentropy')
+    history = train_model_with_oversampling(model, X_train, y_train)
+    print("Evaluating trend model...")
+    model = load_model('CHARPOON_univ.h5')
+    evaluate_model(model, X_test, y_test)
+
+def label_v2_patterns(data, symbol, window=90, slope_threshold=0.01):
+    """
+    OBV(y축)와 VWAP(x축)의 산점도에서 V2 패턴 탐지 및 라벨링
+    - 1: 상승(양의 상관관계 또는 역 V자 패턴)
+    - 2: 하강(음의 상관관계)
+    - 0: 패턴 없음
+    """
+    data = data.copy()
+    data['V2_Pattern'] = 0  # 0: 패턴 없음, 1: 상승, 2: 하강
+
+    for i in range(0, len(data) - window + 1):
+        # 현재 window에 해당하는 데이터
+        window_data = data.iloc[i:i + window]
+        
+        if len(window_data) < window:
+            continue
+
+        obv = window_data[f"{symbol}_OBV"].values
+        vwap = window_data[f"{symbol}_VWAP"].values
+
+        # 최소점 및 최대점 탐색
+        min_point = np.argmin(obv)
+        max_point = np.argmax(obv)
+
+        # 역 V자 조건 확인
+        if min_point > 0 and min_point < len(obv) - 1:
+            left_slope = (obv[min_point] - obv[0]) / (vwap[min_point] - vwap[0] + 1e-6)
+            right_slope = (obv[-1] - obv[min_point]) / (vwap[-1] - vwap[min_point] + 1e-6)
+            
+            if left_slope > slope_threshold and right_slope < -slope_threshold:
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 1  # 역 V자
+            
+        # 선형 회귀를 통한 일반적 상승/하강 탐지
+        else:
+            slope, _ = np.polyfit(vwap, obv, 1)  # 1차 회귀선
+
+            if slope > slope_threshold:  # 상승
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 1
+            elif slope < -slope_threshold:  # 하강
+                data.loc[data.index[i:i + window], 'V2_Pattern'] = 2
+
+    return data['V2_Pattern']
+
+def calculate_technical_indicators(df, symbol):
+    df = df.copy()
+    
+    df[f'{symbol}_MA20'] = df[f'{symbol}_Close'].rolling(window=20).mean()
+    df[f'{symbol}_MA50'] = df[f'{symbol}_Close'].rolling(window=50).mean()
+    df[f'{symbol}_RSI'] = rsi(df[f'{symbol}_Close'], window=14)
+    df[f'{symbol}_VWAP'] = (df[f'{symbol}_Close'] * df[f'{symbol}_Volume']).cumsum() / df[f'{symbol}_Volume'].cumsum()
+    df[f'{symbol}_CMF'] = ((df[f'{symbol}_Close'] - df[f'{symbol}_Low']) - (df[f'{symbol}_High'] - df[f'{symbol}_Close'])) / \
+                   (df[f'{symbol}_High'] - df[f'{symbol}_Low']) * df[f'{symbol}_Volume']
+    df[f'{symbol}_CMF'] = df[f'{symbol}_CMF'].rolling(window=20).mean()
+    df[f'{symbol}_CCI'] = cci(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=20)
+    df[f'{symbol}_ADX'] = adx(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=14)
+    df[f'{symbol}_OBV'] = on_balance_volume(df[f'{symbol}_Close'], df[f'{symbol}_Volume'])
+    df[f'{symbol}_V2_Pattern'] = label_v2_patterns(df, symbol, window=window)
+
+    df.dropna(inplace=True)
+
+    scaler = StandardScaler()
+    for feature in features:
+        df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
+
+    return df
+
+def _finetune_model(model, X, y, model_name, epochs=15, batch_size=64):
+    checkpoint = ModelCheckpoint(f'best_{model_name}_finetuned_model.h5', monitor='loss', save_best_only=True, mode='min')
+    early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+    print(f"Fine-tuning {model_name} model...")
+    
+    history = model.fit(
+        X,
+        y, 
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_split=0.2,
+        callbacks=[checkpoint, early_stop]
+    )
+    return model, history
+
+def finetune_model(symbol, df_with_indicators, original_model_path='CHARPOON_univ.h5'):
+    symbol_data = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].copy()
+    symbol_data = target_function(symbol_data, symbol)
+    
+    X, y = [], []
+    for i in range(len(symbol_data) - seqlen):
+        X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seqlen].values)
+        y.append(symbol_data[f'{symbol}_Signal'].iloc[i+seqlen])
+    
+    X = np.array(X)
+    y = np.array(y)
+
+    class_counts = Counter(y)
+    min_samples = min(class_counts.values())
+    k_neighbors = min(max(1, min_samples - 1), 3)  # Ensure k_neighbors is <= min_samples - 1
+    smote = SMOTE(k_neighbors=k_neighbors, random_state=42)
+    smote_tomek = SMOTETomek(smote=smote, random_state=42)
+    n_samples, timesteps, n_features = X.shape
+    X_flat = X.reshape((n_samples, timesteps * n_features))
+    
+    X_resampled, y_resampled = smote_tomek.fit_resample(X_flat, y)
+    encoder = OneHotEncoder(categories=[[0,1,2]], sparse_output=False)
+    y_resampled = encoder.fit_transform(y_resampled.reshape(-1, 1))
+    X_resampled = X_resampled.reshape((-1, timesteps, n_features))
+    model = load_model(original_model_path)
+
+    finetuned_model, history = _finetune_model(model, X_resampled, y_resampled, f'CHARPOON_{symbol}')
+    
+    return finetuned_model
+
+def predict(model, raw, symbol):
+    df = calculate_technical_indicators(raw, symbol)
+
+    x = df[[f"{symbol}_{feature}" for feature in features]].values
+
+    x = np.expand_dims(x, axis=0)
+    return model.predict(x, verbose=0)[0]
+
+if __name__ == "__main__":
+    combined_prices = pd.read_pickle('./crypto-ohlcv.pkl')
+    if combined_prices is not None:
+        symbols = {col.split('_')[0] for col in combined_prices.columns}
+        df_with_indicators = combined_prices.copy()
+        new_indicators = {}
+        for stock in symbols:
+            temp_df = pd.DataFrame({
+                f'{stock}_Open': combined_prices[f"{stock}_Open"],
+                f'{stock}_High': combined_prices[f"{stock}_High"],
+                f'{stock}_Low': combined_prices[f"{stock}_Low"],
+                f'{stock}_Close': combined_prices[f"{stock}_Close"],
+                f'{stock}_Volume': combined_prices[f"{stock}_Volume"]
+            })
+            df = calculate_technical_indicators(temp_df, stock)
+            for indicator in features:
+                new_indicators[f'{stock}_{indicator}'] = df[f'{stock}_{indicator}']
+        df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
+        df_with_indicators.to_pickle('./charpoon_df.pkl')
+        create_harpoon(df_with_indicators, symbols)
