@@ -131,6 +131,34 @@ def process_symbol_data_012(symbol, df_with_indicators, seq_length, features, ta
     
     return symbol_X, symbol_y
 
+def process_symbol_data_012_chunk(symbol, df_with_indicators, seq_length, features, target_function):
+    print(f"Processing {symbol}...")
+    data = df_with_indicators[[f'{symbol}_Open'] + [f'{symbol}_{feature}' for feature in features]].copy()
+    data = target_function(data, symbol)
+    data.dropna(inplace=True)
+
+    for i in range(len(data) - seq_length):
+        X = data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seq_length].values
+        y = data[f'{symbol}_Signal'].iloc[i+seq_length]
+        yield X, y
+
+    print(f"{symbol} : Preprocessed")
+
+
+def create_and_save_data_chunks_012(symbols, df_with_indicators, seq_length, features, target_function, prefix):
+    X_batch, y_batch = [], []
+    for symbol in symbols:
+        for X, y in process_symbol_data_012_chunk(symbol, df_with_indicators, seq_length, features, target_function):
+            X_batch.append(X)
+            y_batch.append(y)
+            if len(X_batch) >= 4000: 
+                save_data_chunk(X_batch, y_batch, prefix)
+                X_batch, y_batch = [], []
+        
+    if X_batch:
+        save_data_chunk(X_batch, y_batch, prefix)
+
+
 def create_and_save_data_012(symbols, df_with_indicators, seq_length, features, target_function, prefix):
     X, y = [], []
     for symbol in symbols:

@@ -110,7 +110,7 @@ def train_model_with_oversampling(model, X_train, y_train):
 
 def create_harpoon(df_with_indicators, symbols):
     if not glob.glob('./chunks/charpoon_data_chunk_*.pkl'):
-        utils.create_and_save_data_012(symbols, df_with_indicators, seqlen, features, target_function, 'charpoon_')
+        utils.create_and_save_data_chunks_012(symbols, df_with_indicators, seqlen, features, target_function, 'charpoon_')
     X_train, X_test, y_train, y_test = utils.load_and_split_data_onehot('charpoon_')
     model = create_model((seqlen, len(features)), loss='categorical_crossentropy')
     history = train_model_with_oversampling(model, X_train, y_train)
@@ -174,13 +174,15 @@ def calculate_technical_indicators(df, symbol):
     df[f'{symbol}_CCI'] = cci(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=20)
     df[f'{symbol}_ADX'] = adx(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=14)
     df[f'{symbol}_OBV'] = on_balance_volume(df[f'{symbol}_Close'], df[f'{symbol}_Volume'])
-    df[f'{symbol}_V2_Pattern'] = label_v2_patterns(df, symbol, window=window, slope_threshold=2)
+    
+    #현재 OHLCV 에서 O=H=L=C 문제로 CMF 등이 계산되지 않음. 이를 해결해야함.
 
     df.dropna(inplace=True)
-
     scaler = StandardScaler()
     for feature in features:
         df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
+
+    df[f'{symbol}_V2_Pattern'] = label_v2_patterns(df, symbol, window=window, slope_threshold=2)
 
     return df
 
@@ -202,7 +204,6 @@ def _finetune_model(model, X, y, model_name, epochs=15, batch_size=64):
 def finetune_model(symbol, df_with_indicators, original_model_path='CHARPOON_univ.h5'):
     symbol_data = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].copy()
     symbol_data = target_function(symbol_data, symbol)
-    
     X, y = [], []
     for i in range(len(symbol_data) - seqlen):
         X.append(symbol_data[[f'{symbol}_{feature}' for feature in features]].iloc[i:i+seqlen].values)
@@ -239,21 +240,25 @@ def predict(model, raw, symbol):
 
 if __name__ == "__main__":
     combined_prices = pd.read_pickle('./crypto-ohlcv.pkl')
+    
     if combined_prices is not None:
         symbols = {col.split('_')[0] for col in combined_prices.columns}
-        df_with_indicators = combined_prices.copy()
-        new_indicators = {}
-        for stock in symbols:
-            temp_df = pd.DataFrame({
-                f'{stock}_Open': combined_prices[f"{stock}_Open"],
-                f'{stock}_High': combined_prices[f"{stock}_High"],
-                f'{stock}_Low': combined_prices[f"{stock}_Low"],
-                f'{stock}_Close': combined_prices[f"{stock}_Close"],
-                f'{stock}_Volume': combined_prices[f"{stock}_Volume"]
-            })
-            df = calculate_technical_indicators(temp_df, stock)
-            for indicator in features:
-                new_indicators[f'{stock}_{indicator}'] = df[f'{stock}_{indicator}']
-        df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
-        df_with_indicators.to_pickle('./charpoon_df.pkl')
+        if os.path.exists('./charpoon_df.pkl'):
+            df_with_indicators = pd.read_pickle('./charpoon_df.pkl')
+        else:
+            df_with_indicators = combined_prices.copy()
+            new_indicators = {}
+            for stock in symbols:
+                temp_df = pd.DataFrame({
+                    f'{stock}_Open': combined_prices[f"{stock}_Open"],
+                    f'{stock}_High': combined_prices[f"{stock}_High"],
+                    f'{stock}_Low': combined_prices[f"{stock}_Low"],
+                    f'{stock}_Close': combined_prices[f"{stock}_Close"],
+                    f'{stock}_Volume': combined_prices[f"{stock}_Volume"]
+                })
+                df = calculate_technical_indicators(temp_df, stock)
+                for indicator in features:
+                    new_indicators[f'{stock}_{indicator}'] = df[f'{stock}_{indicator}']
+            df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
+            df_with_indicators.to_pickle('./charpoon_df.pkl')
         create_harpoon(df_with_indicators, symbols)
