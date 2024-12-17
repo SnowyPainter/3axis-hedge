@@ -44,7 +44,7 @@ def target_function(data, symbol):
     data = data.copy()
     target = f'{symbol}_Signal'
     data[target] = 0  # 0: 패턴 없음, 2: V자, 1: 역V자
-    slope_threshold = 0.02
+    slope_threshold = 30
 
     for i in range(0, len(data)-window+1):
         window_data = data.iloc[i:i+window]
@@ -174,7 +174,7 @@ def calculate_technical_indicators(df, symbol):
     df[f'{symbol}_CCI'] = cci(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=20)
     df[f'{symbol}_ADX'] = adx(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=14)
     df[f'{symbol}_OBV'] = on_balance_volume(df[f'{symbol}_Close'], df[f'{symbol}_Volume'])
-    df[f'{symbol}_V2_Pattern'] = label_v2_patterns(df, symbol, window=window)
+    df[f'{symbol}_V2_Pattern'] = label_v2_patterns(df, symbol, window=window, slope_threshold=2)
 
     df.dropna(inplace=True)
 

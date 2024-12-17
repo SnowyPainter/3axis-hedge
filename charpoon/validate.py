@@ -43,7 +43,6 @@ def label_v_patterns(data, cmf_col='CMF', vwap_col='VWAP', window=90, slope_thre
         if min_point > 0 and min_point < len(cmf) - 1:
             left_slope = (cmf[min_point] - cmf[0]) / (vwap[min_point] - vwap[0] + 1e-6)
             right_slope = (cmf[-1] - cmf[min_point]) / (vwap[-1] - vwap[min_point] + 1e-6)
-            
             # V자 패턴 확인
             if left_slope < -slope_threshold and right_slope > slope_threshold:
                 data.loc[data.index[i + min_point], 'V_Pattern'] = 1  # V자형
@@ -82,7 +81,6 @@ def label_v2_patterns(data, obv_col='OBV', vwap_col='VWAP', window=90, slope_thr
         if min_point > 0 and min_point < len(obv) - 1:
             left_slope = (obv[min_point] - obv[0]) / (vwap[min_point] - vwap[0] + 1e-6)
             right_slope = (obv[-1] - obv[min_point]) / (vwap[-1] - vwap[min_point] + 1e-6)
-            
             if left_slope > slope_threshold and right_slope < -slope_threshold:
                 data.loc[data.index[i:i + window], 'V2_Pattern'] = 1  # 역 V자
             
@@ -245,8 +243,8 @@ def analyze_all_stocks(combined_prices, threshold=0.2):
 
         # 기술 지표 추가 및 라벨링
         df = utils.tech(ohlcv)
-        df = label_v_patterns(df, window=72)
-        df = label_v2_patterns(df, window=72)
+        df = label_v_patterns(df, window=72, slope_threshold=30)
+        df = label_v2_patterns(df, window=72, slope_threshold=2)
         df = label_outcomes(df, window=36, threshold=threshold)
 
         #save_image(df, stock)
