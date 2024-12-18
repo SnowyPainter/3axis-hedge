@@ -76,11 +76,11 @@ def detect_and_plot_signals():
     plt.legend()
     plt.grid(True)
     plt.savefig(f"{symbol}_v_inverted_v_patterns.png")
-    plt.close()
+    plt.show()
 
 for symbol in ["DOGE-USD", "BTC-USD", "XRP-USD"]:
     symbols = [symbol]
-    data = utils.load_historical_for_learning(symbol, utils.today_before(3), utils.today(), interval='1m')
+    data = utils.load_historical_for_learning(symbol, utils.today_before(30), utils.today(), interval='1h')
     if os.path.exists(f"best_CHARPOON_{symbol}_finetuned_model.h5"):
         print(f"Model for {symbol} already exists. Skipping training.")
         model = load_model(f"best_CHARPOON_{symbol}_finetuned_model.h5")

@@ -174,6 +174,7 @@ def calculate_technical_indicators(df, symbol):
     df[f'{symbol}_CCI'] = cci(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=20)
     df[f'{symbol}_ADX'] = adx(df[f'{symbol}_High'], df[f'{symbol}_Low'], df[f'{symbol}_Close'], window=14)
     df[f'{symbol}_OBV'] = on_balance_volume(df[f'{symbol}_Close'], df[f'{symbol}_Volume'])
+    df[f'{symbol}_V2_Pattern'] = label_v2_patterns(df, symbol, window=window, slope_threshold=2)
     
     #현재 OHLCV 에서 O=H=L=C 문제로 CMF 등이 계산되지 않음. 이를 해결해야함.
 
@@ -181,8 +182,6 @@ def calculate_technical_indicators(df, symbol):
     scaler = StandardScaler()
     for feature in features:
         df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
-
-    df[f'{symbol}_V2_Pattern'] = label_v2_patterns(df, symbol, window=window, slope_threshold=2)
 
     return df
 
@@ -231,12 +230,15 @@ def finetune_model(symbol, df_with_indicators, original_model_path='CHARPOON_uni
     return finetuned_model
 
 def predict(model, raw, symbol):
-    df = calculate_technical_indicators(raw, symbol)
+    try:
+        df = calculate_technical_indicators(raw, symbol)
 
-    x = df[[f"{symbol}_{feature}" for feature in features]].values
+        x = df[[f"{symbol}_{feature}" for feature in features]].values
 
-    x = np.expand_dims(x, axis=0)
-    return model.predict(x, verbose=0)[0]
+        x = np.expand_dims(x, axis=0)
+        return model.predict(x, verbose=0)[0]
+    except:
+        return [0,0,0]
 
 if __name__ == "__main__":
     combined_prices = pd.read_pickle('./crypto-ohlcv.pkl')
