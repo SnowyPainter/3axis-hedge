@@ -3,4 +3,5 @@ __pycache__
 *.pkl
 AlgoShield/
 creators/
-hugging_face_upload.py
+*.joblib
+*.h5

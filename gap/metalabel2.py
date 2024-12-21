@@ -33,6 +33,22 @@ def predict(df_with_indicators, symbol):
     
     return np.array(predictions)
 
+model = joblib.load('gap-light.joblib')
+seqlen = 90
+
+def predict_gap_light(df_with_indicators, symbol):
+    features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
+    predictions = []
+
+    for i in range(len(df_with_indicators) - seqlen + 1):
+        X = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].iloc[i:i + seqlen].values
+        X = X.reshape(1, -1)  # Reshape for sklearn model
+        prediction = model.predict(X)[0]
+        print(f"{symbol} {i} {len(df_with_indicators) - seqlen + 1} : {prediction}")
+        predictions.append(prediction)
+    
+    return np.array(predictions)
+
 class MetaLabelingRandomForest:
     def __init__(self, seq_length=30):
         self.seq_length = seq_length
@@ -81,7 +97,7 @@ class MetaLabelingRandomForest:
         for feature in self.gap_features_normalized:
             df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
 
-        predictions = predict(df, symbol)
+        predictions = predict_gap_light(df, symbol)
         df[f'{symbol}_Meta'] = np.nan  # Initialize with NaN
         df[f'{symbol}_Meta'].iloc[self.seq_length-1:len(predictions)+self.seq_length-1] = predictions  # Assign predictions
 
@@ -243,9 +259,49 @@ class MetaLabelingRandomForest:
         rf_model = self.train_random_forest(X_train, y_train)
         self.evaluate_model(rf_model, X_test, y_test)
 
+def create_pickle(directory='../stock_market_data/sp500/', name='sp500_combined_close_prices_for_meta.pkl'):
+    csv_files = glob.glob(os.path.join(directory, 'csv/*.csv'))
+    combined_df = pd.DataFrame()
+    top_companies = [
+        'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'GOOG', 'TSLA',
+        'XOM', 'AVGO', 'CVX',
+    ]
+
+    csv_files = [f for f in csv_files if any(company in f for company in top_companies)]
+    print(f"Number of top companies found: {len(csv_files)}")
+    
+    for file in csv_files:
+        df = pd.read_csv(file)
+        stock_name = os.path.basename(file).split('.')[0]
+        df = df[['Date', 'Open', 'Close', 'Volume', 'High', 'Low']]
+        df['Open'] = df['Open'].astype(float)
+        df['Close'] = df['Close'].astype(float)
+        df['Volume'] = df['Volume'].astype(float)
+        df['Date'] = pd.to_datetime(df['Date'], format='%d-%m-%Y')
+        df = df.rename(columns={
+            'Open': f"{stock_name}_Open", 
+            'Close': f"{stock_name}_Close", 
+            'Volume': f"{stock_name}_Volume", 
+            'High': f"{stock_name}_High", 
+            'Low': f"{stock_name}_Low"
+        })
+        df.set_index('Date', inplace=True)
+        if combined_df.empty:
+            combined_df = df
+        else:
+            combined_df = combined_df.join(df, how='outer')
+            
+    combined_df.sort_index(inplace=True)
+    combined_df = combined_df.loc['2010-01-01':]
+    combined_df = combined_df.dropna(axis=1, thresh=len(combined_df) - 29)
+    combined_df = combined_df.dropna(axis=1, how='all')
+    combined_df.dropna(inplace=True)
+    combined_df.to_pickle(name)
+
 # Example usage
 if __name__ == "__main__":
-    combined_prices = pd.read_pickle('sp500_combined_close_volume_prices.pkl')
+    create_pickle()
+    combined_prices = pd.read_pickle('sp500_combined_close_prices_for_meta.pkl')
     symbols = list(set(col.split('_')[0] for col in combined_prices.columns))
     
     meta_labeler = MetaLabelingRandomForest()
