@@ -9,6 +9,11 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from tensorflow.keras.mixed_precision import Policy, set_global_policy
+policy = Policy('mixed_float16')
+set_global_policy(policy)
+tf.config.threading.set_intra_op_parallelism_threads(4)
+tf.config.threading.set_inter_op_parallelism_threads(4)
 
 features = [
     'EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size'
@@ -33,10 +38,37 @@ def create_features_and_labels(df_with_indicators, symbol, seq_length):
     
     return np.array(X_sequences), np.array(y_sequences)
 
+'''
+    # 더 복잡한 모델 구조
+    lstm1 = LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(inputs)
+    norm1 = LayerNormalization()(lstm1)
+    lstm2 = LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(norm1)
+    norm2 = LayerNormalization()(lstm2)
+    att1 = Dense(256)(norm2)
+    att2 = Dense(256)(norm2)
+    att3 = Dense(256)(norm2)
+    attention_scores = tf.matmul(att1, tf.transpose(att2, [0, 2, 1])) / tf.sqrt(256.0)
+    attention_weights = tf.nn.softmax(attention_scores)
+    attention_output = tf.matmul(attention_weights, att3)
+    attention_output = Add()([attention_output, norm2])
+    norm3 = LayerNormalization()(attention_output)
+
+    pooled = tf.reduce_mean(norm3, axis=1)
+    dense1 = Dense(512, activation='relu')(pooled)
+    drop1 = Dropout(0.4)(dense1)
+    dense2 = Dense(256, activation='relu')(drop1)
+    drop2 = Dropout(0.4)(dense2)
+    dense3 = Dense(128, activation='relu')(drop2)
+    
+    output = Dense(n_classes, activation='softmax')(dense3)
+    
+    model = Model(inputs=inputs, outputs=output)
+    
+'''
 
 def create_lstm_model(seq_length, n_features, n_classes=3):
     inputs = Input(shape=(seq_length, n_features))
-    lstm_out1 = LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(inputs)
+    lstm_out1 = LSTM(128, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(inputs)
     attention_scores = Dense(1, activation='tanh')(lstm_out1)
     attention_weights = tf.nn.softmax(attention_scores, axis=1)
     attention_output = tf.multiply(lstm_out1, attention_weights)
@@ -68,13 +100,6 @@ def train_model(X_train, y_train, X_val, y_val, seq_length, n_features, model_na
             monitor='val_loss',
             save_best_only=True,
             verbose=1
-        ),
-        ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=0.5,
-            patience=5,
-            min_lr=1e-6,
-            verbose=1
         )
     ]
     
@@ -83,9 +108,10 @@ def train_model(X_train, y_train, X_val, y_val, seq_length, n_features, model_na
         X_train, y_train,
         validation_data=(X_val, y_val),
         epochs=100,
-        batch_size=128,
+        batch_size=512,
         callbacks=callbacks,
-        verbose=1
+        verbose=1,
+        use_multiprocessing=True
     )
     
     return model, history
