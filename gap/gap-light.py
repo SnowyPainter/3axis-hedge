@@ -158,7 +158,7 @@ def evaluate_model(model, X_test, y_test):
 
 if __name__ == "__main__":
     # Parameters
-    seq_length = 90
+    seq_length = 45
     
     # Create or load data
     create_pickle(name='sp500_combined_close_volume_prices.pkl')
@@ -183,7 +183,7 @@ if __name__ == "__main__":
         
         df_with_indicators = pd.concat([df_with_indicators, pd.DataFrame(new_indicators)], axis=1)
         df_with_indicators.dropna(inplace=True)
-
+        df_with_indicators.to_pickle('./gap-light-df-indicator-45.pkl')
         X_all, y_all = [], []
         for symbol in symbols:
             X_symbol, y_symbol = create_features_and_labels(df_with_indicators, symbol, seq_length)
