@@ -9,9 +9,9 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
-from tensorflow.keras.mixed_precision import Policy, set_global_policy
-policy = Policy('mixed_float16')
-set_global_policy(policy)
+#from tensorflow.keras.mixed_precision import Policy, set_global_policy
+#policy = Policy('mixed_float16')
+#set_global_policy(policy)
 tf.config.threading.set_intra_op_parallelism_threads(4)
 tf.config.threading.set_inter_op_parallelism_threads(4)
 
@@ -38,22 +38,29 @@ def create_features_and_labels(df_with_indicators, symbol, seq_length):
     
     return np.array(X_sequences), np.array(y_sequences)
 
-'''
-    # 더 복잡한 모델 구조
+def create_lstm_model(seq_length, n_features, n_classes=3):
+    inputs = Input(shape=(seq_length, n_features))
+    
+    # Multi-layer LSTM
     lstm1 = LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(inputs)
     norm1 = LayerNormalization()(lstm1)
+    
     lstm2 = LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(norm1)
     norm2 = LayerNormalization()(lstm2)
     att1 = Dense(256)(norm2)
     att2 = Dense(256)(norm2)
     att3 = Dense(256)(norm2)
-    attention_scores = tf.matmul(att1, tf.transpose(att2, [0, 2, 1])) / tf.sqrt(256.0)
+    attention_scores = tf.matmul(att1, tf.transpose(att2, [0, 2, 1]))
+    scale = tf.cast(tf.math.sqrt(256.0), dtype=att1.dtype)
+    attention_scores = attention_scores / scale
     attention_weights = tf.nn.softmax(attention_scores)
     attention_output = tf.matmul(attention_weights, att3)
+    
     attention_output = Add()([attention_output, norm2])
     norm3 = LayerNormalization()(attention_output)
-
+    
     pooled = tf.reduce_mean(norm3, axis=1)
+    
     dense1 = Dense(512, activation='relu')(pooled)
     drop1 = Dropout(0.4)(dense1)
     dense2 = Dense(256, activation='relu')(drop1)
@@ -64,25 +71,13 @@ def create_features_and_labels(df_with_indicators, symbol, seq_length):
     
     model = Model(inputs=inputs, outputs=output)
     
-'''
-
-def create_lstm_model(seq_length, n_features, n_classes=3):
-    inputs = Input(shape=(seq_length, n_features))
-    lstm_out1 = LSTM(128, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(inputs)
-    attention_scores = Dense(1, activation='tanh')(lstm_out1)
-    attention_weights = tf.nn.softmax(attention_scores, axis=1)
-    attention_output = tf.multiply(lstm_out1, attention_weights)
-    attention_output = tf.reduce_sum(attention_output, axis=1)
-    dense1 = Dense(128, activation='relu')(attention_output)
-    dropout1 = Dropout(0.3)(dense1)
-    dense2 = Dense(64, activation='relu')(dropout1)
-    output = Dense(n_classes, activation='softmax')(dense2)
-    model = Model(inputs=inputs, outputs=output)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
     model.compile(
-        optimizer='adam',
+        optimizer=optimizer,
         loss='sparse_categorical_crossentropy',
         metrics=['accuracy']
     )
+    
     return model
 
 def train_model(X_train, y_train, X_val, y_val, seq_length, n_features, model_name='gap-d1.h5'):
@@ -111,6 +106,7 @@ def train_model(X_train, y_train, X_val, y_val, seq_length, n_features, model_na
         batch_size=512,
         callbacks=callbacks,
         verbose=1,
+        workers=4,
         use_multiprocessing=True
     )
     
