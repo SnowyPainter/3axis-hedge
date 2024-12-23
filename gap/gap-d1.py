@@ -128,7 +128,7 @@ def evaluate_model(model, X_test, y_test):
     print(confusion_matrix(y_test, y_pred_classes))
 
 if __name__ == "__main__":
-    seq_length = 45
+    seq_length = 30
     
     combined_prices = pd.read_pickle('sp500_combined_close_volume_prices.pkl')
     symbols = list(set(col.split('_')[0] for col in combined_prices.columns))

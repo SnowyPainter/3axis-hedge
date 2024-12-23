@@ -1,6 +1,5 @@
 __pycache__
 /chunks
-*.pkl
 AlgoShield/
 creators/
 *.joblib
