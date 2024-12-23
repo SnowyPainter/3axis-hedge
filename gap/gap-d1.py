@@ -40,44 +40,28 @@ def create_features_and_labels(df_with_indicators, symbol, seq_length):
 
 def create_lstm_model(seq_length, n_features, n_classes=3):
     inputs = Input(shape=(seq_length, n_features))
-    
-    # Multi-layer LSTM
-    lstm1 = LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(inputs)
+    lstm1 = LSTM(128, return_sequences=True, dropout=0.1)(inputs)
     norm1 = LayerNormalization()(lstm1)
-    
-    lstm2 = LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)(norm1)
+    lstm2 = LSTM(64)(norm1)
     norm2 = LayerNormalization()(lstm2)
-    att1 = Dense(256)(norm2)
-    att2 = Dense(256)(norm2)
-    att3 = Dense(256)(norm2)
-    attention_scores = tf.matmul(att1, tf.transpose(att2, [0, 2, 1]))
-    scale = tf.cast(tf.math.sqrt(256.0), dtype=att1.dtype)
-    attention_scores = attention_scores / scale
-    attention_weights = tf.nn.softmax(attention_scores)
-    attention_output = tf.matmul(attention_weights, att3)
+    dense1 = Dense(128, activation='relu')(norm2)
+    drop1 = Dropout(0.2)(dense1)
+    dense2 = Dense(64, activation='relu')(drop1)
     
-    attention_output = Add()([attention_output, norm2])
-    norm3 = LayerNormalization()(attention_output)
-    
-    pooled = tf.reduce_mean(norm3, axis=1)
-    
-    dense1 = Dense(512, activation='relu')(pooled)
-    drop1 = Dropout(0.4)(dense1)
-    dense2 = Dense(256, activation='relu')(drop1)
-    drop2 = Dropout(0.4)(dense2)
-    dense3 = Dense(128, activation='relu')(drop2)
-    
-    output = Dense(n_classes, activation='softmax')(dense3)
+    output = Dense(n_classes, activation='softmax')(dense2)
     
     model = Model(inputs=inputs, outputs=output)
+    optimizer = tf.keras.optimizers.Adam(
+        learning_rate=0.0005,
+        clipnorm=1.0
+    )
     
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
     model.compile(
         optimizer=optimizer,
         loss='sparse_categorical_crossentropy',
         metrics=['accuracy']
     )
-    
+
     return model
 
 def train_model(X_train, y_train, X_val, y_val, seq_length, n_features, model_name='gap-d1.h5'):
@@ -102,8 +86,8 @@ def train_model(X_train, y_train, X_val, y_val, seq_length, n_features, model_na
     history = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val),
-        epochs=100,
-        batch_size=512,
+        epochs=300,
+        batch_size=256,
         callbacks=callbacks,
         verbose=1,
         workers=4,

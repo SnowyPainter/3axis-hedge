@@ -1,3 +1,5 @@
+import sys, os
+sys.path.append('../')
 
 import pandas as pd
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
@@ -11,7 +13,7 @@ from keras.callbacks import ModelCheckpoint, EarlyStopping
 import numpy as np
 from collections import Counter
 
-seqlen = 60
+seqlen = 30
 
 gap_features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size']
 def calculate_technical_indicators(df, symbol):
@@ -34,7 +36,7 @@ def calculate_technical_indicators(df, symbol):
 
 def predict(raw_data, symbol, model):
     df_with_indicators = calculate_technical_indicators(raw_data, symbol)
-    features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size']
+    features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
     X = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].tail(seqlen).values
     
     if len(X) > seqlen:
@@ -48,16 +50,16 @@ def predict(raw_data, symbol, model):
 class GapCapture:
     
     def __init__(self, symbol, univ_model) -> None:
-        self.seqlen = 60
+        self.seqlen = 30
         self.symbol = symbol
         self.univ_model = univ_model
-        self.features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'Gap_Size']
+        self.features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
         raw = utils.load_historical_data(symbol, utils.today_before(700), utils.today(), interval='1d')
         
         raw = raw[raw[symbol+"_Volume"] != 0]
         self.df_with_indicators = calculate_technical_indicators(raw, symbol)
 
-    def _finetune_model(self, model, X, y, model_name, epochs=10, batch_size=32):
+    def _finetune_model(self, model, X, y, model_name, epochs=20, batch_size=32):
         checkpoint = ModelCheckpoint(f'./trained_model/GAP_{model_name}_finetuned.h5', monitor='val_loss', save_best_only=True, mode='min')
         early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
         print(f"Fine-tuning {model_name} model...")
@@ -79,7 +81,7 @@ class GapCapture:
             """
             data[f'{symbol}_Gap'] = data[f'{symbol}_Price'].pct_change(lookahead_days).fillna(0)
             data[f'{symbol}_Signal'] = data[f'{symbol}_Gap'].apply(
-                lambda x: 1 if x >= 0.05 else (0 if x <= -0.05 else 2)
+                lambda x: 1 if x >= 0.02 else (0 if x <= -0.02 else 2)
             )
             return data
         
@@ -107,8 +109,8 @@ class GapCapture:
         X_flat = X.reshape((n_samples, timesteps * n_features))
         
         X_resampled, y_resampled = smote_tomek.fit_resample(X_flat, y)
-        encoder = OneHotEncoder(categories=[[0,1,2]], sparse=False)
-        y_resampled = encoder.fit_transform(y_resampled.reshape(-1, 1))
+        #encoder = OneHotEncoder(categories=[[0,1,2]], sparse=False)
+        #y_resampled = encoder.fit_transform(y_resampled.reshape(-1, 1))
         X_resampled = X_resampled.reshape((-1, timesteps, n_features))
         finetuned_model, history = self._finetune_model(self.univ_model, X_resampled, y_resampled, f'{self.symbol}')
         
@@ -153,15 +155,15 @@ def load_model_with_error_handling(model_path):
         loaded_model = keras.models.load_model(model_path)
         return loaded_model
 
-symbols = ["041190.KQ", "024740.KQ", "330860.KQ", "445090.KQ"]
-y = ["폭락", "폭락", "폭등", "폭등"]
+symbols = ["082800.KQ", "006340.KS"]
+y = ["폭락", "폭등"]
 
 # 0 폭락 1 폭등 2 변동 x 
 
 for symbol, label in zip(symbols, y):
     print(symbol, label)
-    model = load_or_finetune_gapcapture(symbol, load_model_with_error_handling("./GAP_univ.h5"))
-    raw = utils.load_historical_data(symbol, utils.today_before(180), utils.today_before(2), interval='1d')
+    model = load_or_finetune_gapcapture(symbol, load_model_with_error_handling("./gap-d1.h5"))
+    raw = utils.load_historical_data(symbol, utils.today_before(180), utils.today_before(1), interval='1d')
     print(raw)
     print("Prediction")
     print(predict(raw, symbol, model))
