@@ -16,21 +16,22 @@ tf.config.threading.set_intra_op_parallelism_threads(4)
 tf.config.threading.set_inter_op_parallelism_threads(4)
 
 features = [
-    'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'MACD', 
-    'Stoch', 'WilliamsR', 'ADX', 'Momentum', 'Gap_Size'
+    'RSI', 'ATR', 'Volume_Change',
+    'CCI', 'ADX', 'Stoch', 'MACD', 'Gap_Size'
 ]
 
 features_normalized = [
-    'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'MACD',
-    'Stoch', 'WilliamsR', 'ADX', 'Momentum'
+    'RSI', 'ATR', 'Volume_Change',
+    'CCI', 'ADX', 'Stoch', 'MACD'
 ]
 
 def create_features_and_labels(df_with_indicators, symbol, seq_length):
     print(f"Processing {symbol}...")
     feature_columns = [f'{symbol}_{feature}' for feature in features_normalized]
     X = df_with_indicators[feature_columns].values
+    threshold = 0.03
     df_with_indicators[f'{symbol}_Signal'] = df_with_indicators[f'{symbol}_Gap_Size'].apply(
-        lambda x: 1 if x >= 0.02 else (0 if x <= -0.02 else 2)
+        lambda x: 1 if x >= threshold else (0 if x <= -threshold else 2)
     )
     y = df_with_indicators[f'{symbol}_Signal'].values
     X_sequences, y_sequences = [], []
@@ -54,7 +55,7 @@ def create_lstm_model(seq_length, n_features, n_classes=3):
     
     model = Model(inputs=inputs, outputs=output)
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=0.0005,
+        learning_rate=0.0002,
         clipnorm=1.0
     )
     
@@ -72,7 +73,7 @@ def train_model(X_train, y_train, X_val, y_val, seq_length, n_features, model_na
     callbacks = [
         EarlyStopping(
             monitor='val_loss',
-            patience=10,
+            patience=15,
             restore_best_weights=True,
             verbose=1
         ),
@@ -172,12 +173,10 @@ def create_df_indicators(combined_prices):
         return symbols, df_with_indicators
 
 if __name__ == "__main__":
-    seq_length = 60
+    seq_length = 30
     combined_prices = pd.read_pickle('sp500_combined_close_volume_prices.pkl')
     symbols = list(set(col.split('_')[0] for col in combined_prices.columns))
     
-    # create_df_indicators 하고 나서 이거 하면 Killed 됨.
-
     df_with_indicators = pd.read_pickle('./gap-d1-df-indicator.pkl')
     
     X_all, y_all = [], []
@@ -211,4 +210,4 @@ if __name__ == "__main__":
     n_features = X_train.shape[2]
     model, history = train_model(X_train, y_train, X_val, y_val, seq_length, n_features)
     evaluate_model(model, X_test, y_test)
-    model.save('gap-d1.h5')
+    #model.save('gap-d1.h5')

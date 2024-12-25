@@ -20,12 +20,13 @@ import shutil
 
 
 model = load_model('./gap-d1.h5')
-seqlen = 60
+seqlen = 30
 def predict(df_with_indicators, symbol):
     features = [
-        'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'MACD',
-        'Stoch', 'WilliamsR', 'ADX', 'Momentum'
+        'RSI', 'ATR', 'Volume_Change',
+        'CCI', 'ADX', 'Stoch', 'MACD'
     ]
+
     predictions = []
 
     for i in range(len(df_with_indicators) - seqlen + 1):
