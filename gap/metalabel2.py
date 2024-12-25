@@ -19,22 +19,26 @@ from tensorflow.keras.models import load_model
 import shutil
 
 
-model = load_model('./GAP_univ.h5')
-seqlen = 90
+model = load_model('./gap-d1.h5')
+seqlen = 60
 def predict(df_with_indicators, symbol):
-    features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
+    features = [
+        'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change', 'MACD',
+        'Stoch', 'WilliamsR', 'ADX', 'Momentum'
+    ]
     predictions = []
 
     for i in range(len(df_with_indicators) - seqlen + 1):
         X = df_with_indicators[[f'{symbol}_{feature}' for feature in features]].iloc[i:i + seqlen].values
         X = X.reshape(1, seqlen, len(features))
         prediction = model.predict(X, verbose=0)[0] 
+        print(f"{symbol} {i} {len(df_with_indicators) - seqlen + 1} : {prediction}")
         predictions.append(np.argmax(prediction))
     
     return np.array(predictions)
 
-model = joblib.load('gap-light.joblib')
-seqlen = 90
+#model = joblib.load('gap-light.joblib')
+#seqlen = 90
 
 def predict_gap_light(df_with_indicators, symbol):
     features = ['EMA_12', 'RSI', 'ATR', 'Bollinger_band_diff', 'Volume_Change']
@@ -97,7 +101,7 @@ class MetaLabelingRandomForest:
         for feature in self.gap_features_normalized:
             df[f'{symbol}_{feature}'] = scaler.fit_transform(df[[f'{symbol}_{feature}']])
 
-        predictions = predict_gap_light(df, symbol)
+        predictions = predict(df, symbol)
         df[f'{symbol}_Meta'] = np.nan  # Initialize with NaN
         df[f'{symbol}_Meta'].iloc[self.seq_length-1:len(predictions)+self.seq_length-1] = predictions  # Assign predictions
 
@@ -292,7 +296,7 @@ def create_pickle(directory='../stock_market_data/sp500/', name='sp500_combined_
             combined_df = combined_df.join(df, how='outer')
             
     combined_df.sort_index(inplace=True)
-    combined_df = combined_df.loc['2010-01-01':]
+    combined_df = combined_df.loc['2015-01-01':]
     combined_df = combined_df.dropna(axis=1, thresh=len(combined_df) - 29)
     combined_df = combined_df.dropna(axis=1, how='all')
     combined_df.dropna(inplace=True)

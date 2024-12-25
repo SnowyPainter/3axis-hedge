@@ -5,7 +5,8 @@ with open('./hftoken.txt', 'r') as file:
 REPO_ID = "SnowyPainter/AlgoShield"
 REPO_TYPE = "model"
 LOCAL_FILES = [
-    "gap/test.joblib"
+    "gap/gap-d1.h5",
+    "gap/meta_gap_random_forest.joblib",
 ]
 for local_file in LOCAL_FILES:
     try:
